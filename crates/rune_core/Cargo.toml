@@ -1,0 +1,8 @@
+[package]
+name = "rune_core"
+version.workspace = true
+edition.workspace = true
+description = "Engine-agnostic game logic for Runecaster: map gen, rune-grammar spells, combat, AI."
+
+[dependencies]
+rand = { workspace = true }

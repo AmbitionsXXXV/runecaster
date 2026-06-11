@@ -1,0 +1,10 @@
+[package]
+name = "runecaster"
+version.workspace = true
+edition.workspace = true
+description = "Runecaster: a rune-grammar roguelike (Bevy front-end)."
+
+[dependencies]
+rune_core = { workspace = true }
+rand = { workspace = true }
+bevy = "0.18.1"
