@@ -153,7 +153,10 @@ terminal client, a web build, or a fuller Bevy game with sprites and audio.
 - **Tuning knobs:** `elem_burst` (counts/colours/motion per element),
   `spawn_cast_fx` (form motion), and the procedural textures `px_spark` /
   `px_ring` / `px_shard` / `px_streak`. All are plain data + pixel math.
-- **Camera shake** ramps up when the player takes damage and decays over time.
+- **Combat feedback**: actors flash on hit (white for monsters, red for you),
+  melee attackers lunge into their target, the dying fade out and shrink, and
+  damage/heal numbers float off actors. **Camera shake** ramps up when you take
+  damage and kicks lightly when you land or finish a blow, decaying over time.
 - A **title screen** and a **game-over card** show the run score and the
   persisted best.
 - **Sound is not wired** (it needs audio asset files). To add it, drop `.ogg`
