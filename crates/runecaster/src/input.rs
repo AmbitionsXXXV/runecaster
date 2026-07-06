@@ -170,7 +170,7 @@ fn cast_slot(sim: &mut Sim, idx: usize, name: &str) {
     sim.dirty = true;
     if sim.spellbook[idx].is_empty() {
         sim.world.log.push(format!(
-            "Slot {name} is empty — compose a word, then Shift+{name} binds it."
+            "Slot {name} is empty - compose a word, then Shift+{name} binds it."
         ));
         return;
     }

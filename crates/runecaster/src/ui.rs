@@ -76,7 +76,7 @@ pub(crate) fn draw_title(commands: &mut Commands, best: u32) {
         -90.0,
         16.0,
         Color::srgb(0.6, 0.62, 0.72),
-        "Compose runes into spells. Bolt+Fire burns. Self+Fire burns YOU.\nQ casts your attack · E casts your heal · numbers+Enter compose new words\nMove wasd/hjkl/arrows (diag yubn)",
+        "Compose runes into spells. Bolt+Fire burns. Self+Fire burns YOU.\nQ casts your attack, E casts your heal, numbers+Enter compose new words\nMove wasd/hjkl/arrows (diag yubn)",
     );
     if best > 0 {
         center_text(
@@ -164,7 +164,7 @@ pub(crate) fn spawn_ui(commands: &mut Commands, sim: &Sim, best: u32) {
             y,
             13.0,
             Color::srgb(0.75, 0.9, 1.0),
-            format!("SLOWED — next action lost (x{})", p.slowed),
+            format!("SLOWED - next action lost (x{})", p.slowed),
         );
         y -= STATUS_ROW_H;
     }
@@ -177,7 +177,7 @@ pub(crate) fn spawn_ui(commands: &mut Commands, sim: &Sim, best: u32) {
         y,
         13.0,
         Color::srgb(0.65, 0.7, 0.85),
-        "RUNES — number adds (Shift: 11+)".to_string(),
+        "RUNES - number adds (Shift: 11+)".to_string(),
     );
     y -= LINE_H_18;
     for (i, rune) in w.known_runes.iter().enumerate() {
@@ -186,7 +186,7 @@ pub(crate) fn spawn_ui(commands: &mut Commands, sim: &Sim, best: u32) {
         let key = match i {
             0..=9 => format!("{}", (i + 1) % 10),
             10..=19 => format!("s{}", (i + 1) % 10),
-            _ => "··".to_string(), // unbound; unreachable with 16 rune kinds
+            _ => "--".to_string(), // unbound; unreachable with 16 rune kinds
         };
         let cat = match rune.category() {
             RuneCategory::Form => "form",
@@ -203,7 +203,7 @@ pub(crate) fn spawn_ui(commands: &mut Commands, sim: &Sim, best: u32) {
             let (cr, cg, cb) = rune.color();
             Color::srgb_u8(cr, cg, cb)
         };
-        let suffix = if in_word { "  · in word" } else { "" };
+        let suffix = if in_word { "  (in word)" } else { "" };
         text_block(
             commands,
             panel_x,
@@ -269,7 +269,7 @@ pub(crate) fn spawn_ui(commands: &mut Commands, sim: &Sim, best: u32) {
                 notes.push("conjures walls".into());
             }
             if !notes.is_empty() {
-                word.push_str(&format!("   {}\n", notes.join(" · ")));
+                word.push_str(&format!("   {}\n", notes.join(", ")));
             }
             if spell.hits_caster {
                 word.push_str("   ! THIS WILL HIT YOU !\n");
@@ -302,7 +302,7 @@ pub(crate) fn spawn_ui(commands: &mut Commands, sim: &Sim, best: u32) {
         y,
         13.0,
         Color::srgb(0.65, 0.7, 0.85),
-        "SPELLBOOK — Q/E/R cast · Shift+key bind".to_string(),
+        "SPELLBOOK - Q/E/R cast, Shift+key bind".to_string(),
     );
     y -= LINE_H_17;
     for (i, key) in ["Q", "E", "R"].iter().enumerate() {
@@ -339,7 +339,7 @@ pub(crate) fn spawn_ui(commands: &mut Commands, sim: &Sim, best: u32) {
                 y,
                 13.0,
                 Color::srgb(0.85, 0.78, 0.55),
-                format!("* {} — {}", r.name(), r.effect_desc()),
+                format!("* {} - {}", r.name(), r.effect_desc()),
             );
             y -= LINE_H_17;
         }
@@ -348,11 +348,11 @@ pub(crate) fn spawn_ui(commands: &mut Commands, sim: &Sim, best: u32) {
     // f. HINTS — pinned to the bottom of the right column, not stacked.
     let hint = match sim.mode {
         Mode::Normal => {
-            "move wasd/hjkl/arrows · diag yubn\nSpace wait · Shift+. descend\nnumbers compose · Enter cast · Esc clear\nQ/E/R cast slot · Shift+Q/E/R bind"
+            "move wasd/hjkl/arrows, diag yubn\nSpace wait, Shift+. descend\nnumbers compose, Enter cast, Esc clear\nQ/E/R cast slot, Shift+Q/E/R bind"
                 .to_string()
         }
         Mode::Aim => format!(
-            ">>> AIM {} — highlighted tiles are hit\nsame dir / Enter fires · new dir re-aims\nEsc cancels",
+            ">>> AIM {} - highlighted tiles are hit\nsame dir / Enter fires, new dir re-aims\nEsc cancels",
             dir_label(sim.aim_dir)
         ),
     };
