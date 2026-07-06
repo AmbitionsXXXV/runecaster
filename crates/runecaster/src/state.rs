@@ -25,6 +25,10 @@ pub(crate) struct Sim {
     pub(crate) mode: Mode,
     pub(crate) screen: Screen,
     pub(crate) composing: Vec<Rune>,
+    /// Quick-cast spellbook: Q/E/R each hold a compile-checked word.
+    /// Starts pre-bound (attack + heal) so minute one is "Q attacks,
+    /// E heals" — composition is the growth layer, not the entry fee.
+    pub(crate) spellbook: [Vec<Rune>; 3],
     pub(crate) dirty: bool,
     pub(crate) level_gen: u64,
     /// Player HP at the last sync, for damage-driven screen shake.
@@ -43,6 +47,7 @@ impl Sim {
             mode: Mode::Normal,
             screen: Screen::Title,
             composing: Vec::new(),
+            spellbook: default_spellbook(),
             dirty: true,
             level_gen: 0,
             last_hp,
@@ -56,11 +61,23 @@ impl Sim {
         self.mode = Mode::Normal;
         self.screen = Screen::Play;
         self.composing.clear();
+        self.spellbook = default_spellbook();
         self.dirty = true;
         self.level_gen += 1;
         self.last_hp = self.world.player().hp;
         self.recorded = false;
     }
+}
+
+/// The starter spellbook: a plain Fire bolt on Q and the self-heal on E —
+/// both compile from the starter rune kit — with R left free for the
+/// player's first own word.
+fn default_spellbook() -> [Vec<Rune>; 3] {
+    [
+        vec![Rune::Fire],
+        vec![Rune::OnSelf, Rune::Heal],
+        Vec::new(),
+    ]
 }
 
 #[derive(Resource, Default)]

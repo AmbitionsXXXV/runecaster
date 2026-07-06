@@ -37,6 +37,8 @@ The first build compiles all of Bevy and takes a while; later builds are fast.
 | Wait a turn | `Space` |
 | Descend stairs `>` | `Shift` + `.` while standing on the `>` |
 | Compose a spell | number keys — each appends the matching rune from the right panel (`Shift`+number reaches runes 11+) |
+| Quick-cast a saved spell | `Q` / `E` / `R` — spellbook slots (starts with Q = fire bolt, E = self-heal) |
+| Bind / clear a slot | `Shift`+`Q`/`E`/`R` saves the composed word to that slot (empty word clears it) |
 | Drop last rune | `Backspace` |
 | Clear the word | `Esc` |
 | Cast | `Enter` (or `C`). Bolt/Touch spells then ask you to **aim** a direction. |
@@ -48,18 +50,21 @@ backfire warning, and any grammar error.
 
 ## The rune grammar
 
-A spell word is `FORM? ELEMENT+ MODIFIER*`:
+A spell word is `FORM? ELEMENT+ MODIFIER*`, and **each rune may appear at most
+once per word** — power comes from *combining* runes, not repeating one:
 
-- **Forms** (delivery — at most one; defaults to `Bolt`):
+- **Forms** (delivery — at most one; defaults to a free implicit `Bolt`;
+  spending the actual `Bolt` rune buys +1 range):
   `Bolt` (stops at the first target), `Beam` (pierces a whole line),
   `Nova` (burst around you), `Self` (affects your tile), `Touch` (the tile you face).
-- **Elements** (effect — at least one required):
-  `Fire` (damage + burn), `Frost` (damage + slow), `Lightning` (damage),
-  `Force` (impact damage), `Heal` (restores HP), `Drain` (damage + lifesteal),
+- **Elements** (effect — at least one required; each carries its own rider):
+  `Fire` (damage + burn), `Frost` (damage + slow), `Lightning` (damage,
+  arcs to a nearby second enemy), `Force` (damage + knockback),
+  `Heal` (restores HP), `Drain` (damage + lifesteal),
   `Teleport` (blink to the landing tile), `Barrier` (conjure a temporary wall).
-- **Modifiers** (any number):
-  `Amplify` (more power), `Spread` (bigger area / longer range),
-  `Chain` (arc the effect to nearby enemies).
+- **Modifiers** (any subset):
+  `Amplify` (×1.5 power), `Spread` (bigger area / longer range),
+  `Chain` (extra arcs to nearby enemies).
 
 **Backfire:** a self-targeting form (`Self`) carrying a *damaging* element
 strikes the caster. The UI warns you, but it's still castable — sometimes you
@@ -69,6 +74,9 @@ strikes the caster. The UI warns you, but it's still castable — sometimes you
 
 - **Monsters** scale with depth: rats and bats, goblins, wraiths, ogres, and
   **trolls** (which regenerate every turn — burst them down).
+- **Mana** flows from aggression: every kill refunds mana, passive regen is a
+  slow trickle, and descending the stairs grants a breather (part of your HP
+  and a full mana refill) — camping between fights is a losing trade.
 - **Relics** are floor pickups granting a permanent run-long passive: more HP /
   mana / sight, melee that ignites or heals you, faster mana regen, or HP
   regeneration. They stack across a run.
@@ -105,8 +113,12 @@ runecaster/
 runs in seconds without compiling the engine:
 
 ```bash
-cargo test -p rune_core      # 44 tests: spell grammar, combat, FOV, determinism,
+cargo test -p rune_core      # 51 tests: spell grammar, combat, FOV, determinism,
                              # regression suite (replay, cross-depth cleanup)
+
+# deterministic balance harness: a greedy bot plays N full runs headless and
+# reports win rate, per-depth death rates, and mana starvation
+cargo run -p rune_core --example balance -- 200
 ```
 
 Because the rules are engine-agnostic, the same `rune_core` could later drive a

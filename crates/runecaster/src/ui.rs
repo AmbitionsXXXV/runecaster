@@ -76,7 +76,7 @@ pub(crate) fn draw_title(commands: &mut Commands, best: u32) {
         -90.0,
         16.0,
         Color::srgb(0.6, 0.62, 0.72),
-        "Compose runes into spells. Bolt+Fire burns. Self+Fire burns YOU.\nMove wasd/hjkl/arrows (diag yubn) · number keys build a spell · Enter casts",
+        "Compose runes into spells. Bolt+Fire burns. Self+Fire burns YOU.\nQ casts your attack · E casts your heal · numbers+Enter compose new words\nMove wasd/hjkl/arrows (diag yubn)",
     );
     if best > 0 {
         center_text(
@@ -259,7 +259,35 @@ pub(crate) fn spawn_ui(commands: &mut Commands, sim: &Sim, best: u32) {
     y -= word_lines * LINE_H_18;
     y -= GAP;
 
-    // d. RELICS — title + one line per relic, only when the player has any.
+    // d. SPELLBOOK — the three quick-cast slots: Q/E/R casts, Shift+key
+    // binds the composed word. Pre-bound at run start (attack + heal) so
+    // the first minute needs no composition at all.
+    text_block(
+        commands,
+        panel_x,
+        y,
+        13.0,
+        Color::srgb(0.65, 0.7, 0.85),
+        "SPELLBOOK — Q/E/R cast · Shift+key bind".to_string(),
+    );
+    y -= LINE_H_17;
+    for (i, key) in ["Q", "E", "R"].iter().enumerate() {
+        let entry = &sim.spellbook[i];
+        let (line, color) = if entry.is_empty() {
+            (format!("[{key}] (empty)"), Color::srgb(0.42, 0.44, 0.52))
+        } else {
+            let names: Vec<&str> = entry.iter().map(|r| r.name()).collect();
+            (
+                format!("[{key}] {}", names.join("+")),
+                Color::srgb(0.78, 0.84, 0.98),
+            )
+        };
+        text_block(commands, panel_x, y, 13.0, color, line);
+        y -= LINE_H_17;
+    }
+    y -= GAP;
+
+    // e. RELICS — title + one line per relic, only when the player has any.
     if !w.relics.is_empty() {
         text_block(
             commands,
@@ -283,10 +311,10 @@ pub(crate) fn spawn_ui(commands: &mut Commands, sim: &Sim, best: u32) {
         }
     }
 
-    // e. HINTS — pinned to the bottom of the right column, not stacked.
+    // f. HINTS — pinned to the bottom of the right column, not stacked.
     let hint = match sim.mode {
         Mode::Normal => {
-            "move wasd/hjkl/arrows · diag yubn\nSpace wait · Shift+. descend\nnumbers compose · Enter cast · Esc clear"
+            "move wasd/hjkl/arrows · diag yubn\nSpace wait · Shift+. descend\nnumbers compose · Enter cast · Esc clear\nQ/E/R cast slot · Shift+Q/E/R bind"
                 .to_string()
         }
         Mode::Aim => ">>> AIM: press a direction\n(Esc to cancel)".to_string(),
@@ -296,7 +324,7 @@ pub(crate) fn spawn_ui(commands: &mut Commands, sim: &Sim, best: u32) {
     } else {
         Color::srgb(0.6, 0.62, 0.72)
     };
-    text_block(commands, panel_x, -340.0, 13.0, hint_color, hint);
+    text_block(commands, panel_x, -334.0, 13.0, hint_color, hint);
 
     // --- log band: older lines dim, the newest line highlighted ---
     let log_x = BOARD_LEFT + 8.0;
