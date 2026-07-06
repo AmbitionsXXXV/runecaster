@@ -249,11 +249,13 @@ fn push_particle(
     ));
 }
 
-/// Per-element burst recipe: texture, count, palette, motion.
+/// Per-element burst recipe: texture, count, and motion. Color is *not*
+/// part of the recipe — every burst derives its tint from the element's
+/// one canonical color (`ElementKind::color()` in runes.rs), so particle,
+/// UI, and preview colors can never drift apart.
 struct Burst {
     image: Handle<Image>,
     count: u32,
-    base: [u8; 3],
     jitter: i32,
     life: f32,
     speed: f32,
@@ -270,7 +272,6 @@ fn elem_burst(element: ElementKind, tiles: &Tiles) -> Burst {
         Fire => Burst {
             image: tiles.spark.clone(),
             count: 9,
-            base: [255, 140, 50],
             jitter: 40,
             life: 0.55,
             speed: 26.0,
@@ -283,7 +284,6 @@ fn elem_burst(element: ElementKind, tiles: &Tiles) -> Burst {
         Frost => Burst {
             image: tiles.shard.clone(),
             count: 8,
-            base: [150, 210, 255],
             jitter: 30,
             life: 0.55,
             speed: 44.0,
@@ -296,7 +296,6 @@ fn elem_burst(element: ElementKind, tiles: &Tiles) -> Burst {
         Lightning => Burst {
             image: tiles.streak.clone(),
             count: 7,
-            base: [255, 240, 120],
             jitter: 20,
             life: 0.26,
             speed: 72.0,
@@ -309,7 +308,6 @@ fn elem_burst(element: ElementKind, tiles: &Tiles) -> Burst {
         Force => Burst {
             image: tiles.spark.clone(),
             count: 6,
-            base: [220, 170, 255],
             jitter: 25,
             life: 0.4,
             speed: 56.0,
@@ -322,7 +320,6 @@ fn elem_burst(element: ElementKind, tiles: &Tiles) -> Burst {
         Drain => Burst {
             image: tiles.spark.clone(),
             count: 7,
-            base: [222, 80, 170],
             jitter: 25,
             life: 0.5,
             speed: 30.0,
@@ -335,7 +332,6 @@ fn elem_burst(element: ElementKind, tiles: &Tiles) -> Burst {
         Heal => Burst {
             image: tiles.spark.clone(),
             count: 7,
-            base: [120, 255, 150],
             jitter: 25,
             life: 0.7,
             speed: 18.0,
@@ -348,7 +344,6 @@ fn elem_burst(element: ElementKind, tiles: &Tiles) -> Burst {
         Teleport => Burst {
             image: tiles.ring.clone(),
             count: 3,
-            base: [150, 230, 255],
             jitter: 15,
             life: 0.5,
             speed: 8.0,
@@ -361,7 +356,6 @@ fn elem_burst(element: ElementKind, tiles: &Tiles) -> Burst {
         Barrier => Burst {
             image: tiles.shard.clone(),
             count: 6,
-            base: [150, 180, 235],
             jitter: 20,
             life: 0.5,
             speed: 20.0,
@@ -381,6 +375,11 @@ fn spawn_element_burst(
     intensity: f32,
 ) {
     let b = elem_burst(element, tiles);
+    // Single-source tint: the element's canonical color, uniformly lifted
+    // a touch so bursts pop brighter than flat UI swatches — one rule
+    // instead of a hand-tuned per-element palette that can drift.
+    let ec = element.color();
+    const LIFT: i32 = 18;
     let mut rng = rand::rng();
     let n = ((b.count as f32) * intensity).round().max(1.0) as u32;
     for _ in 0..n {
@@ -389,9 +388,9 @@ fn spawn_element_burst(
         let vel = Vec3::new(ang.cos() * spd, ang.sin() * spd, 0.0);
         let j = b.jitter;
         let base = Color::srgb_u8(
-            (b.base[0] as i32 + rng.random_range(-j..=j)).clamp(0, 255) as u8,
-            (b.base[1] as i32 + rng.random_range(-j..=j)).clamp(0, 255) as u8,
-            (b.base[2] as i32 + rng.random_range(-j..=j)).clamp(0, 255) as u8,
+            (ec[0] as i32 + LIFT + rng.random_range(-j..=j)).clamp(0, 255) as u8,
+            (ec[1] as i32 + LIFT + rng.random_range(-j..=j)).clamp(0, 255) as u8,
+            (ec[2] as i32 + LIFT + rng.random_range(-j..=j)).clamp(0, 255) as u8,
         );
         let life = b.life * rng.random_range(0.8..1.2);
         let spin = if b.spin > 0.0 {
