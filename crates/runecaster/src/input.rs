@@ -47,7 +47,12 @@ fn handle_normal(keys: &ButtonInput<KeyCode>, sim: &mut Sim) {
         if keys.just_pressed(*key) {
             let slot = if shift { i + 10 } else { i };
             if let Some(&rune) = sim.world.known_runes.get(slot) {
-                if sim.composing.len() < MAX_RUNES {
+                if sim.composing.contains(&rune) {
+                    sim.world
+                        .log
+                        .push(format!("The {} rune is already in the word.", rune.name()));
+                    sim.dirty = true;
+                } else if sim.composing.len() < MAX_RUNES {
                     sim.composing.push(rune);
                     sim.dirty = true;
                 }

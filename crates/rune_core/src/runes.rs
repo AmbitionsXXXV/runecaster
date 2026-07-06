@@ -8,6 +8,7 @@
 //!   FORM     — how the spell is delivered. At most one. Defaults to `Bolt`.
 //!   ELEMENT  — what it does. At least one is required.
 //!   MODIFIER — tweaks power / area / behaviour. Any number.
+//!   Every rune kind may appear at most once in a word — duplicates reject.
 //! ```
 //!
 //! Combos are emergent: `Bolt + Fire` is a fireball; `Nova + Fire` is a burst
@@ -262,6 +263,13 @@ impl Spell {
         self.elements.iter().any(|e| matches!(e, ElementKind::Heal))
     }
 
+    /// Hit points restored by this spell's Heal element: `power + HEAL_BONUS`.
+    /// Casting Heal spends a turn not dealing damage, so the exchange rate
+    /// must beat a same-cost damage spell 1:1 to be worth casting.
+    pub fn heal_amount(&self) -> i32 {
+        self.power + HEAL_BONUS
+    }
+
     pub fn drains(&self) -> bool {
         self.elements
             .iter()
@@ -278,6 +286,22 @@ impl Spell {
         self.elements
             .iter()
             .any(|e| matches!(e, ElementKind::Barrier))
+    }
+
+    /// Lightning's signature rider: it arcs to a nearby enemy even without a
+    /// Chain rune (see `World::resolve_spell`).
+    pub fn arcs(&self) -> bool {
+        self.elements
+            .iter()
+            .any(|e| matches!(e, ElementKind::Lightning))
+    }
+
+    /// Force's signature rider: a surviving target is shoved back a tile
+    /// (see `World::apply_spell_to`).
+    pub fn pushes(&self) -> bool {
+        self.elements
+            .iter()
+            .any(|e| matches!(e, ElementKind::Force))
     }
 
     /// Whether the form needs the player to choose an aim direction.
@@ -321,6 +345,7 @@ pub enum SpellError {
     NoElement,
     MultipleForms,
     TooComplex,
+    DuplicateRune,
 }
 
 impl SpellError {
@@ -332,15 +357,22 @@ impl SpellError {
             }
             SpellError::MultipleForms => "A spell may have only one form rune.",
             SpellError::TooComplex => "That incantation is too tangled to hold (6 runes max).",
+            SpellError::DuplicateRune => "Each rune may appear only once in a word.",
         }
     }
 }
 
 pub const MAX_RUNES: usize = 6;
 const BASE_ELEMENT_POWER: i32 = 4;
-const AMPLIFY_BONUS: i32 = 3;
+/// Amplify multiplies power by AMPLIFY_NUM/AMPLIFY_DEN (×1.5; integer
+/// division truncates: 4 -> 6, 8 -> 12, 12 -> 18). The word-uniqueness rule
+/// caps Amplify at one occurrence, so this only ever applies once.
+const AMPLIFY_NUM: i32 = 3;
+const AMPLIFY_DEN: i32 = 2;
 const BOLT_BASE_RANGE: i32 = 6;
 const BEAM_BASE_RANGE: i32 = 10;
+/// Heal effects land for `power + HEAL_BONUS`; see `Spell::heal_amount`.
+const HEAL_BONUS: i32 = 2;
 
 /// Parse an ordered rune word into a castable [`Spell`], or explain why not.
 pub fn compile(words: &[Rune]) -> Result<Spell, SpellError> {
@@ -357,8 +389,17 @@ pub fn compile(words: &[Rune]) -> Result<Spell, SpellError> {
     let mut spread = 0;
     let mut chain = 0;
     let mut mana_cost = 0;
+    let mut seen: Vec<Rune> = Vec::new();
 
     for &rune in words {
+        // Duplicate detection runs before anything else this iteration —
+        // notably before `set_form`, so the same form rune appearing twice
+        // reports as a duplicate rather than "multiple forms".
+        if seen.contains(&rune) {
+            return Err(SpellError::DuplicateRune);
+        }
+        seen.push(rune);
+
         mana_cost += rune.mana_cost();
         match rune {
             Rune::Bolt => set_form(&mut form, Form::Bolt)?,
@@ -384,12 +425,23 @@ pub fn compile(words: &[Rune]) -> Result<Spell, SpellError> {
         return Err(SpellError::NoElement);
     }
 
+    // Casting a form rune explicitly (vs. falling back to the Bolt default)
+    // is worth a small, tangible bonus — see the Bolt range bump below.
+    let explicit_form = form.is_some();
     let form = form.unwrap_or(Form::Bolt);
     let power_elems = elements.iter().filter(|e| e.contributes_power()).count() as i32;
-    let power = BASE_ELEMENT_POWER * power_elems + AMPLIFY_BONUS * amplify;
+    let mut power = BASE_ELEMENT_POWER * power_elems;
+    if amplify > 0 {
+        power = power * AMPLIFY_NUM / AMPLIFY_DEN;
+    }
 
     let (radius, range) = match form {
-        Form::Bolt => (spread, BOLT_BASE_RANGE + spread),
+        // An explicit Bolt rune buys 1 extra range over the implicit default
+        // — spending a rune slot (and its mana) on Bolt is no longer a trap.
+        Form::Bolt => (
+            spread,
+            BOLT_BASE_RANGE + spread + if explicit_form { 1 } else { 0 },
+        ),
         Form::Beam => (0, BEAM_BASE_RANGE + spread * 2),
         Form::Nova => (1 + spread, 0),
         Form::OnSelf => (spread, 0),
@@ -471,8 +523,11 @@ mod tests {
 
     #[test]
     fn chain_is_counted() {
-        let s = compile(&[Rune::Bolt, Rune::Lightning, Rune::Chain, Rune::Chain]).unwrap();
-        assert_eq!(s.chain, 2);
+        // Only one Chain rune is legal now that runes must be unique within
+        // a word (see `duplicate_rune_is_rejected`); Lightning's own arc is
+        // a separate, world.rs-level rider and does not show up here.
+        let s = compile(&[Rune::Bolt, Rune::Lightning, Rune::Chain]).unwrap();
+        assert_eq!(s.chain, 1);
     }
 
     #[test]
@@ -499,7 +554,7 @@ mod tests {
     fn amplify_raises_power_and_cost() {
         let plain = compile(&[Rune::Bolt, Rune::Fire]).unwrap();
         let amped = compile(&[Rune::Bolt, Rune::Fire, Rune::Amplify]).unwrap();
-        assert_eq!(amped.power, plain.power + AMPLIFY_BONUS);
+        assert_eq!(amped.power, plain.power * 3 / 2);
         assert!(amped.mana_cost > plain.mana_cost);
     }
 
@@ -529,5 +584,30 @@ mod tests {
     fn self_plus_drain_backfires() {
         let s = compile(&[Rune::OnSelf, Rune::Drain]).unwrap();
         assert!(s.hits_caster, "Drain is damaging, so Self+Drain recoils");
+    }
+
+    #[test]
+    fn duplicate_rune_is_rejected() {
+        assert_eq!(
+            compile(&[Rune::Fire, Rune::Fire]),
+            Err(SpellError::DuplicateRune)
+        );
+        assert_eq!(
+            compile(&[Rune::Bolt, Rune::Fire, Rune::Fire]),
+            Err(SpellError::DuplicateRune)
+        );
+        assert_eq!(
+            compile(&[Rune::Bolt, Rune::Bolt, Rune::Fire]),
+            Err(SpellError::DuplicateRune),
+            "duplicate detection precedes the MultipleForms check"
+        );
+    }
+
+    #[test]
+    fn explicit_bolt_outranges_default() {
+        let implicit = compile(&[Rune::Fire]).unwrap();
+        let explicit = compile(&[Rune::Bolt, Rune::Fire]).unwrap();
+        assert_eq!(implicit.range, 6);
+        assert_eq!(explicit.range, 7);
     }
 }

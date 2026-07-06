@@ -19,6 +19,22 @@ pub const MAX_DEPTH: i32 = 5;
 const CHAIN_RANGE: i32 = 4;
 const BARRIER_TURNS: u32 = 8;
 const BURN_DAMAGE: i32 = 2;
+/// Mana refunded to the player when a monster dies (from any source) — a
+/// counterweight to mana-starved stalling near a punching bag. Harness data
+/// (examples/balance.rs) showed ~14 starved turns/run at 2; 3 keeps casting
+/// the primary verb without reopening a rest-loop.
+const KILL_MANA: i32 = 3;
+/// Baseline mana-regen cadence: +1 mana every this many turns.
+const MANA_REGEN_INTERVAL: u64 = 6;
+/// The Battery relic doesn't add to the per-tick amount; it shrinks the
+/// regen interval instead, so its value is "regen ticks twice as often".
+const BATTERY_REGEN_INTERVAL: u64 = 3;
+/// Monsters wake within this radius regardless of the player's own sight
+/// range. Decoupling wake distance from `fov_radius` means a vision relic
+/// (Farsight) can never backfire by also waking monsters farther away.
+const WAKE_RADIUS: i32 = BASE_FOV_RADIUS;
+/// Descending heals `max_hp / this` and refills mana (the floor "breather").
+const DESCEND_HEAL_DIVISOR: i32 = 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RunState {
@@ -79,7 +95,10 @@ impl Relic {
             Relic::Farsight => format!("+{} sight radius", Self::FARSIGHT_RADIUS),
             Relic::Emberbrand => format!("melee ignites ({} turns)", Self::EMBER_BURN),
             Relic::Leechstone => format!("melee heals you for {}", Self::LEECH_HEAL),
-            Relic::Battery => "faster mana regen".into(),
+            Relic::Battery => format!(
+                "mana regen every {} turns (base {})",
+                BATTERY_REGEN_INTERVAL, MANA_REGEN_INTERVAL
+            ),
             Relic::Bulwark => format!("regenerate {} HP each turn", Self::BULWARK_REGEN),
         }
     }
@@ -389,6 +408,12 @@ impl World {
         player.pos = start;
         player.burning = 0;
         player.slowed = 0;
+        // Crossing floors is a breather: mend a quarter of max HP and arrive
+        // with a full mana pool. Each floor is its own mana budget (kills
+        // fund the rest mid-floor), so the pressure stays on without there
+        // ever being a profitable rest-loop.
+        player.hp = (player.hp + player.max_hp / DESCEND_HEAL_DIVISOR).min(player.max_hp);
+        player.mana = player.max_mana;
         self.entities = vec![player];
         self.player_id = 0;
         self.rune_items.clear();
@@ -412,7 +437,10 @@ impl World {
         let rooms = self.map.rooms.clone();
 
         for room in rooms.iter().skip(1) {
-            let count = self.rng.random_range(0..=2) + depth / 2;
+            // Density ramps with depth, but a step later than it used to:
+            // harness runs showed the old `depth / 2` bonus made d2 and d4
+            // attrition walls (d4 death rate 92%).
+            let count = self.rng.random_range(0..=2) + (depth - 1) / 2;
             for _ in 0..count {
                 if let Some(p) = self.random_floor_in(room) {
                     if self.blocking_entity_at(p).is_none() {
@@ -633,13 +661,16 @@ impl World {
             }
         }
 
-        // Chain: arc to nearby fresh enemies. A miss (no direct hit) has
-        // nothing to arc from, so it must not seed the search from the
-        // caster's own position — no target means no chain.
-        if spell.chain > 0 && spell.is_damaging() {
+        // Chain: arc to nearby fresh enemies. Lightning arcs to one enemy
+        // even without a Chain rune — its signature rider — and Chain runes
+        // stack additional arcs on top. A miss (no direct hit) has nothing
+        // to arc from, so it must not seed the search from the caster's own
+        // position — no target means no chain.
+        let arcs = spell.chain + if spell.arcs() { 1 } else { 0 };
+        if arcs > 0 && spell.is_damaging() {
             if let Some(&last) = hit.last() {
                 let mut from = self.entities[last].pos;
-                for _ in 0..spell.chain {
+                for _ in 0..arcs {
                     if let Some(next) = self.nearest_unhit_enemy(from, &hitset, CHAIN_RANGE) {
                         hitset.insert(next);
                         hit.push(next);
@@ -829,7 +860,7 @@ impl World {
             match elem {
                 ElementKind::Heal => {
                     if same_side {
-                        healed += spell.power;
+                        healed += spell.heal_amount();
                     }
                 }
                 ElementKind::Fire => {
@@ -893,14 +924,35 @@ impl World {
         if died {
             self.register_death(id);
         }
+
+        // Force's signature rider: shove a surviving target one tile away
+        // from the caster. Self+Force has caster == target, so the signum of
+        // a zero delta yields `None` and it naturally never shoves itself.
+        if spell.pushes() && self.entities[id].alive {
+            let cpos = self.entities[caster_id].pos;
+            let tpos = self.entities[id].pos;
+            if let Some(dir) =
+                Dir::from_signums((tpos.x - cpos.x).signum(), (tpos.y - cpos.y).signum())
+            {
+                let dest = tpos.step(dir);
+                if self.map.is_walkable(dest) && self.blocking_entity_at(dest).is_none() {
+                    self.entities[id].pos = dest;
+                }
+            }
+        }
+
         (damage > 0, is_enemy)
     }
 
-    /// Bookkeeping when any entity dies: score a kill for monsters, emit a
-    /// death burst.
+    /// Bookkeeping when any entity dies: score a kill for monsters (and
+    /// refund the player some mana for it), emit a death burst.
     fn register_death(&mut self, id: EntityId) {
         if self.entities[id].faction == Faction::Monster {
             self.kills += 1;
+            if self.entities[self.player_id].alive {
+                let p = self.player_mut();
+                p.mana = (p.mana + KILL_MANA).min(p.max_mana);
+            }
         }
         self.fx
             .push(Fx::at(self.entities[id].pos, [185, 45, 45], FxKind::Death));
@@ -942,11 +994,17 @@ impl World {
         self.tick_temp_walls();
         self.turn += 1;
 
-        // Mana regeneration.
-        if self.turn.is_multiple_of(3) && self.entities[self.player_id].alive {
-            let bonus = self.mana_regen_bonus;
+        // Mana regeneration: +1 every MANA_REGEN_INTERVAL turns, or every
+        // BATTERY_REGEN_INTERVAL turns with the Battery relic. Battery's
+        // value is a shorter interval, not a bigger per-tick amount.
+        let interval = if self.mana_regen_bonus > 0 {
+            BATTERY_REGEN_INTERVAL
+        } else {
+            MANA_REGEN_INTERVAL
+        };
+        if self.turn.is_multiple_of(interval) && self.entities[self.player_id].alive {
             let p = self.player_mut();
-            p.mana = (p.mana + 1 + bonus).min(p.max_mana);
+            p.mana = (p.mana + 1).min(p.max_mana);
         }
 
         self.refresh_fov();
@@ -983,9 +1041,11 @@ impl World {
 
             let mpos = self.entities[id].pos;
             let dist = mpos.chebyshev(player_pos);
-            let sees = self.visible[self.map.idx(mpos)];
-            if !sees && dist > self.fov_radius {
-                continue; // dormant until it can see you (or you get close)
+            if dist > WAKE_RADIUS {
+                // Wake distance is fixed, independent of `fov_radius`: a
+                // relic that extends the player's own sight (Farsight) must
+                // not also wake monsters farther away as a side effect.
+                continue;
             }
 
             // Slow is only spent in place of an action it would otherwise

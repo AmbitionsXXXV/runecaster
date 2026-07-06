@@ -146,8 +146,9 @@ fn descend_clears_transient_state_and_keeps_progress() {
             .all(|e| e.faction == rune_core::Faction::Monster && e.alive && e.hp == e.max_hp),
         "all non-player entities are fresh spawns for the new depth"
     );
-    assert_eq!(w.player().hp, 20, "hp carries over across depths");
-    assert_eq!(w.player().mana, 7, "mana carries over across depths");
+    // The floor breather: descending mends max_hp/4 and refills mana.
+    assert_eq!(w.player().hp, 27, "20 carried over + 30/4 breather heal");
+    assert_eq!(w.player().mana, 12, "mana refills to full on descend");
     assert_eq!(w.turn, 1, "turn counter carries over across depths");
     assert_eq!(w.player().burning, 0, "burning is cleared on descend");
     assert_eq!(w.player().slowed, 0, "slowed is cleared on descend");
@@ -282,7 +283,7 @@ fn bolt_fire_full_turn_numbers() {
 
 #[test]
 fn damage_formula_regression() {
-    // Bolt + Fire + Amplify: power = 4*1 + 3*1 = 7 direct damage, plus a
+    // Bolt + Fire + Amplify: power = (4*1) * 3/2 = 6 direct damage, plus a
     // same-turn burn tick (Fire sets burning = 3) for another 2.
     {
         let mut w = World::new(20);
@@ -291,19 +292,27 @@ fn damage_formula_regression() {
         let dummy_id = add_dummy(&mut w, dummy_pos, 20, 20);
         w.player_cast(&[Rune::Bolt, Rune::Fire, Rune::Amplify], Dir::East)
             .unwrap();
-        assert_eq!(w.entities[dummy_id].hp, 11, "20 - 7 direct - 2 burn tick");
+        assert_eq!(w.entities[dummy_id].hp, 12, "20 - 6 direct - 2 burn tick");
     }
 
     // Bolt + Force: power = 4*1 = 4; Force damage is power/2 + 1 = 3. No
-    // status effects, so there is no same-turn tick.
+    // status effects, so there is no same-turn tick. A surviving Force
+    // target is also shoved one tile further away from the caster.
     {
         let mut w = World::new(21);
         clear_monsters(&mut w);
         let dummy_pos = w.player().pos.step(Dir::East);
+        // Carve the tile beyond the dummy too, so the push has somewhere to land.
+        w.map.set(dummy_pos.step(Dir::East), Tile::Floor);
         let dummy_id = add_dummy(&mut w, dummy_pos, 20, 20);
         w.player_cast(&[Rune::Bolt, Rune::Force], Dir::East)
             .unwrap();
         assert_eq!(w.entities[dummy_id].hp, 17, "20 - 3, no status damage");
+        assert_eq!(
+            w.entities[dummy_id].pos,
+            dummy_pos.step(Dir::East),
+            "Force shoves the surviving target one tile away from the caster"
+        );
     }
 
     // Bolt + Fire + Frost: power = 4*2 = 8; Fire and Frost each deal `power`
@@ -372,5 +381,111 @@ fn cast_reports_whether_a_spell_actually_happened() {
     assert!(
         w.entities[0].mana >= 12,
         "no mana cost is paid on a swallowed cast"
+    );
+}
+
+/// Heal's exchange rate: it must out-heal an equivalent-power damage spell,
+/// since casting it spends a turn not dealing damage.
+#[test]
+fn heal_exchange_rate() {
+    let mut w = World::new(201);
+    clear_monsters(&mut w);
+    w.entities[0].hp = 10;
+    w.player_cast(&[Rune::OnSelf, Rune::Heal], Dir::North)
+        .unwrap();
+    assert_eq!(w.player().hp, 16, "10 + power 4 + HEAL_BONUS 2");
+}
+
+/// Lightning arcs to a nearby second enemy on its own — its signature
+/// rider — with no Chain rune in the word at all.
+#[test]
+fn lightning_arcs_without_chain_rune() {
+    let mut w = World::new(202);
+    clear_monsters(&mut w);
+    let p = w.player().pos;
+    let a = p.step(Dir::East);
+    let b = a.offset(1, 1); // within chain range of `a`
+    let ia = add_dummy(&mut w, a, 30, 30);
+    let ib = add_dummy(&mut w, b, 30, 30);
+
+    w.player_cast(&[Rune::Bolt, Rune::Lightning], Dir::East)
+        .unwrap();
+
+    assert!(w.entities[ia].hp < 30, "primary target hit");
+    assert!(
+        w.entities[ib].hp < 30,
+        "Lightning arcs to a neighbour even without a Chain rune"
+    );
+}
+
+/// Killing a monster (by any means) refunds the player a little mana — the
+/// counterweight to the kill-mana economy.
+#[test]
+fn kill_grants_mana() {
+    let mut w = World::new(203);
+    clear_monsters(&mut w);
+    w.entities[0].mana = 5;
+    let dummy_pos = w.player().pos.step(Dir::East);
+    let dummy_id = add_dummy(&mut w, dummy_pos, 1, 1);
+
+    // Bumping into the 1-hp dummy is a one-shot melee kill.
+    w.player_move(Dir::East);
+
+    assert!(!w.entities[dummy_id].alive, "the dummy is killed");
+    assert_eq!(
+        w.player().mana,
+        8,
+        "5 + KILL_MANA(3) on the kill; turn 1 doesn't trigger time-based regen"
+    );
+}
+
+/// Passive mana regen now ticks every 6 turns (not 3); the Battery relic's
+/// value is shrinking that interval to 3, not adding to the per-tick amount.
+#[test]
+fn mana_regen_slowed_to_six_turns() {
+    let mut w = World::new(204);
+    clear_monsters(&mut w);
+    w.entities[0].mana = 0;
+    for _ in 0..5 {
+        w.player_wait();
+    }
+    assert_eq!(w.player().mana, 0, "regen has not fired before turn 6");
+    w.player_wait();
+    assert_eq!(w.player().mana, 1, "regen fires on the 6th turn");
+
+    let mut battery = World::new(205);
+    clear_monsters(&mut battery);
+    battery.entities[0].mana = 0;
+    battery.mana_regen_bonus = 1;
+    for _ in 0..3 {
+        battery.player_wait();
+    }
+    assert_eq!(
+        battery.player().mana,
+        1,
+        "Battery shrinks the interval to 3 turns rather than adding a bonus amount"
+    );
+}
+
+/// Farsight (or any FOV-radius increase) must not also wake monsters farther
+/// away — waking distance is fixed, independent of the player's sight range.
+#[test]
+fn farsight_does_not_wake_distant_monsters() {
+    let mut w = World::new(101);
+    clear_monsters(&mut w);
+    let p = w.player().pos;
+    for i in 1..=10 {
+        w.map.set(p.offset(i, 0), Tile::Floor);
+    }
+    let monster_pos = p.offset(9, 0);
+    let monster_id = add_dummy(&mut w, monster_pos, 10, 10);
+    w.entities[monster_id].ai = Some(rune_core::AiKind::Chaser);
+    w.fov_radius = 10; // simulates the Farsight relic
+
+    w.player_wait();
+
+    assert_eq!(
+        w.entities[monster_id].pos, monster_pos,
+        "distance 9 exceeds the fixed wake radius (8); Farsight's extra visibility must not wake it"
     );
 }

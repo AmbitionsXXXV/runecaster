@@ -193,14 +193,24 @@ pub(crate) fn spawn_ui(commands: &mut Commands, sim: &Sim, best: u32) {
             RuneCategory::Element => "elem",
             RuneCategory::Modifier => "mod ",
         };
-        let (cr, cg, cb) = rune.color();
+        // Runes already in the composing word can't be added again (each
+        // rune kind is unique within a word); dim the row so that's visible
+        // before the player even tries the key.
+        let in_word = sim.composing.contains(rune);
+        let color = if in_word {
+            Color::srgb(0.42, 0.44, 0.52)
+        } else {
+            let (cr, cg, cb) = rune.color();
+            Color::srgb_u8(cr, cg, cb)
+        };
+        let suffix = if in_word { "  · in word" } else { "" };
         text_block(
             commands,
             panel_x,
             y,
             14.0,
-            Color::srgb_u8(cr, cg, cb),
-            format!("[{key:>2}] {:<9} {cat}", rune.name()),
+            color,
+            format!("[{key:>2}] {:<9} {cat}{suffix}", rune.name()),
         );
         y -= LINE_H_18;
     }
@@ -222,7 +232,7 @@ pub(crate) fn spawn_ui(commands: &mut Commands, sim: &Sim, best: u32) {
         Ok(spell) => {
             word.push_str(&format!("=> {}\n", spell.describe()));
             let kind = if spell.heals() && !spell.is_damaging() {
-                format!("heal {}", spell.power)
+                format!("heal {}", spell.heal_amount())
             } else {
                 format!("power {}", spell.power)
             };
