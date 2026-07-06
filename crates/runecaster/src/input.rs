@@ -1,6 +1,6 @@
 use crate::state::{Mode, Screen, Sim};
 use bevy::prelude::*;
-use rune_core::{Dir, RunState, MAX_RUNES};
+use rune_core::{Dir, Faction, Point, RunState, World, MAX_RUNES};
 
 // ---------------------------------------------------------------------------
 // Input
@@ -124,6 +124,12 @@ fn begin_cast(sim: &mut Sim) {
     }
     match sim.world.preview(&sim.composing) {
         Ok(spell) if spell.needs_aim() => {
+            // Pre-aim at the nearest visible enemy so the obvious shot
+            // ("the thing coming at me") needs no re-aiming: its direction
+            // press fires immediately, or Enter accepts the suggestion.
+            if let Some(dir) = suggest_aim(&sim.world) {
+                sim.aim_dir = dir;
+            }
             sim.mode = Mode::Aim;
             sim.dirty = true;
         }
@@ -140,6 +146,24 @@ fn begin_cast(sim: &mut Sim) {
     }
 }
 
+/// Direction (by signum) from the player toward the nearest visible living
+/// monster — Aim mode's opening suggestion.
+fn suggest_aim(w: &World) -> Option<Dir> {
+    let from = w.player().pos;
+    let mut best: Option<(i32, Point)> = None;
+    for e in &w.entities {
+        if !e.alive || e.faction != Faction::Monster || !w.is_visible(e.pos) {
+            continue;
+        }
+        let d = from.chebyshev(e.pos);
+        if best.is_none_or(|(bd, _)| d < bd) {
+            best = Some((d, e.pos));
+        }
+    }
+    let (_, pos) = best?;
+    Dir::from_signums((pos.x - from.x).signum(), (pos.y - from.y).signum())
+}
+
 /// Load spellbook slot `idx` into the composing word and fire it — the
 /// one-key cast that keeps the rune grammar off the per-cast critical path.
 fn cast_slot(sim: &mut Sim, idx: usize, name: &str) {
@@ -150,8 +174,18 @@ fn cast_slot(sim: &mut Sim, idx: usize, name: &str) {
         ));
         return;
     }
+    // A half-composed draft survives the quick-cast: stash it, fire the
+    // slot word, and bring the draft back once the cast resolves (or is
+    // cancelled in Aim mode) — an emergency Q/E never eats your word.
+    let draft = (!sim.composing.is_empty() && sim.composing != sim.spellbook[idx])
+        .then(|| sim.composing.clone());
     sim.composing = sim.spellbook[idx].clone();
     begin_cast(sim);
+    if sim.mode == Mode::Aim {
+        sim.stashed_word = draft;
+    } else if let Some(draft) = draft {
+        sim.composing = draft;
+    }
 }
 
 /// Bind the composed word to spellbook slot `idx`. Only a word that
@@ -181,19 +215,45 @@ fn bind_slot(sim: &mut Sim, idx: usize, name: &str) {
     }
 }
 
+/// Aim mode: the board highlights what the loaded word would hit along
+/// `sim.aim_dir`. Pressing that same direction (or Enter/C) fires; a
+/// *different* direction only re-aims, moving the highlight with it — so
+/// what gets struck is always shown before it's committed.
 fn handle_aim(keys: &ButtonInput<KeyCode>, sim: &mut Sim) {
     if keys.just_pressed(KeyCode::Escape) {
-        sim.mode = Mode::Normal;
-        sim.dirty = true;
+        exit_aim(sim);
+        return;
+    }
+    if keys.just_pressed(KeyCode::Enter) || keys.just_pressed(KeyCode::KeyC) {
+        fire_aimed(sim);
         return;
     }
     if let Some(dir) = movement_dir(keys) {
-        let words = sim.composing.clone();
-        // Word stays loaded (see handle_normal): re-cast is Enter + direction.
-        let _ = sim.world.player_cast(&words, dir);
-        sim.mode = Mode::Normal;
-        sim.dirty = true;
+        if dir == sim.aim_dir {
+            fire_aimed(sim);
+        } else {
+            sim.aim_dir = dir;
+            sim.dirty = true;
+        }
     }
+}
+
+fn fire_aimed(sim: &mut Sim) {
+    let words = sim.composing.clone();
+    let aim = sim.aim_dir;
+    // Word stays loaded (see begin_cast): re-cast is Enter + direction.
+    let _ = sim.world.player_cast(&words, aim);
+    exit_aim(sim);
+}
+
+/// Leave Aim mode; a draft stashed by a quick-cast comes back now (after
+/// firing and after Esc-cancel alike).
+fn exit_aim(sim: &mut Sim) {
+    sim.mode = Mode::Normal;
+    if let Some(draft) = sim.stashed_word.take() {
+        sim.composing = draft;
+    }
+    sim.dirty = true;
 }
 
 fn movement_dir(keys: &ButtonInput<KeyCode>) -> Option<Dir> {

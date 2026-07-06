@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use rune_core::{EntityId, Rune, World};
+use rune_core::{Dir, EntityId, Rune, World};
 use std::collections::HashMap;
 
 // ---------------------------------------------------------------------------
@@ -29,6 +29,14 @@ pub(crate) struct Sim {
     /// Starts pre-bound (attack + heal) so minute one is "Q attacks,
     /// E heals" — composition is the growth layer, not the entry fee.
     pub(crate) spellbook: [Vec<Rune>; 3],
+    /// Direction the Aim mode is currently pointed at. Persists across
+    /// casts so re-aiming at the same threat costs nothing; `begin_cast`
+    /// re-suggests it toward the nearest visible enemy on entering Aim.
+    pub(crate) aim_dir: Dir,
+    /// A half-composed word interrupted by a quick-cast (Q/E/R): restored
+    /// once the slot cast resolves or is cancelled, so an emergency heal
+    /// never eats a draft.
+    pub(crate) stashed_word: Option<Vec<Rune>>,
     pub(crate) dirty: bool,
     pub(crate) level_gen: u64,
     /// Player HP at the last sync, for damage-driven screen shake.
@@ -48,6 +56,8 @@ impl Sim {
             screen: Screen::Title,
             composing: Vec::new(),
             spellbook: default_spellbook(),
+            aim_dir: Dir::East,
+            stashed_word: None,
             dirty: true,
             level_gen: 0,
             last_hp,
@@ -62,6 +72,8 @@ impl Sim {
         self.screen = Screen::Play;
         self.composing.clear();
         self.spellbook = default_spellbook();
+        self.aim_dir = Dir::East;
+        self.stashed_word = None;
         self.dirty = true;
         self.level_gen += 1;
         self.last_hp = self.world.player().hp;

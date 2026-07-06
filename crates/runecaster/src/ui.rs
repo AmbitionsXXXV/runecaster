@@ -3,7 +3,7 @@ use crate::{BOARD_LEFT, Z_PANEL, Z_UI};
 use bevy::prelude::*;
 use bevy::sprite::Anchor;
 use rune_core::world::MAX_DEPTH;
-use rune_core::{RunState, RuneCategory};
+use rune_core::{Dir, ElementKind, RunState, RuneCategory};
 
 // ---------------------------------------------------------------------------
 // UI (Text2d, rebuilt each step)
@@ -237,6 +237,40 @@ pub(crate) fn spawn_ui(commands: &mut Commands, sim: &Sim, best: u32) {
                 format!("power {}", spell.power)
             };
             word.push_str(&format!("   {kind}   cost {} mana\n", spell.mana_cost));
+            // Riders & geometry: what the word actually does beyond raw
+            // power — numbers players previously learned by dying to them.
+            let mut notes: Vec<String> = Vec::new();
+            if spell.needs_aim() {
+                notes.push(format!("range {}", spell.range));
+            }
+            if spell.radius > 0 {
+                notes.push(format!("radius {}", spell.radius));
+            }
+            let arcs = spell.chain + if spell.arcs() { 1 } else { 0 };
+            if arcs > 0 && spell.is_damaging() {
+                notes.push(format!("arcs x{arcs}"));
+            }
+            if spell.elements.contains(&ElementKind::Fire) {
+                notes.push("ignites".into());
+            }
+            if spell.elements.contains(&ElementKind::Frost) {
+                notes.push("slows".into());
+            }
+            if spell.drains() {
+                notes.push("drains life".into());
+            }
+            if spell.pushes() {
+                notes.push("knocks back".into());
+            }
+            if spell.teleports() {
+                notes.push("blinks you".into());
+            }
+            if spell.has_barrier() {
+                notes.push("conjures walls".into());
+            }
+            if !notes.is_empty() {
+                word.push_str(&format!("   {}\n", notes.join(" · ")));
+            }
             if spell.hits_caster {
                 word.push_str("   ! THIS WILL HIT YOU !\n");
                 word_color = Color::srgb(1.0, 0.5, 0.4);
@@ -317,7 +351,10 @@ pub(crate) fn spawn_ui(commands: &mut Commands, sim: &Sim, best: u32) {
             "move wasd/hjkl/arrows · diag yubn\nSpace wait · Shift+. descend\nnumbers compose · Enter cast · Esc clear\nQ/E/R cast slot · Shift+Q/E/R bind"
                 .to_string()
         }
-        Mode::Aim => ">>> AIM: press a direction\n(Esc to cancel)".to_string(),
+        Mode::Aim => format!(
+            ">>> AIM {} — highlighted tiles are hit\nsame dir / Enter fires · new dir re-aims\nEsc cancels",
+            dir_label(sim.aim_dir)
+        ),
     };
     let hint_color = if sim.mode == Mode::Aim {
         Color::srgb(1.0, 0.9, 0.4)
@@ -426,6 +463,20 @@ fn status_row(
         format!("{cur}/{max}"),
     );
     y - STATUS_ROW_H
+}
+
+/// Compact compass label for the aim readout.
+fn dir_label(d: Dir) -> &'static str {
+    match d {
+        Dir::North => "N",
+        Dir::South => "S",
+        Dir::East => "E",
+        Dir::West => "W",
+        Dir::NorthEast => "NE",
+        Dir::NorthWest => "NW",
+        Dir::SouthEast => "SE",
+        Dir::SouthWest => "SW",
+    }
 }
 
 /// Current/max ratio clamped to `0..1`; `0` for a non-positive max so a

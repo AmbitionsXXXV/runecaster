@@ -298,6 +298,47 @@ impl World {
         compile(words)
     }
 
+    /// Read-only aim preview for the UI: the tiles `spell` would affect if
+    /// the player cast it right now along `aim`, plus the extra enemies its
+    /// chain/arc would jump to. Mirrors `resolve_spell`'s targeting exactly
+    /// — same `affected_tiles`, same hit ordering, same "a miss has nothing
+    /// to arc from" seeding, same `CHAIN_RANGE` — without mutating anything,
+    /// so a renderer can promise "the highlighted tiles are what gets hit"
+    /// and be right.
+    pub fn preview_affected(&self, spell: &Spell, aim: Dir) -> (Vec<Point>, Vec<Point>) {
+        let origin = self.player().pos;
+        let tiles = self.affected_tiles(origin, spell, aim);
+
+        let mut chain_targets = Vec::new();
+        let arcs = spell.chain + if spell.arcs() { 1 } else { 0 };
+        if arcs > 0 && spell.is_damaging() {
+            // Direct hits in tile order; the last one seeds the arcs.
+            let mut hitset: HashSet<EntityId> = HashSet::new();
+            let mut last_hit: Option<EntityId> = None;
+            for &t in &tiles {
+                for e in &self.entities {
+                    if e.alive && e.pos == t && hitset.insert(e.id) {
+                        last_hit = Some(e.id);
+                    }
+                }
+            }
+            if let Some(last) = last_hit {
+                let mut from = self.entities[last].pos;
+                for _ in 0..arcs {
+                    if let Some(next) = self.nearest_unhit_enemy(from, &hitset, CHAIN_RANGE) {
+                        hitset.insert(next);
+                        let p = self.entities[next].pos;
+                        chain_targets.push(p);
+                        from = p;
+                    } else {
+                        break;
+                    }
+                }
+            }
+        }
+        (tiles, chain_targets)
+    }
+
     /// Run score; rewards depth, kills, and relics, with a victory bonus.
     pub fn score(&self) -> u32 {
         let base = self.depth as u32 * 120 + self.kills * 15 + self.relics.len() as u32 * 40;
@@ -1406,6 +1447,42 @@ mod tests {
             .unwrap();
         assert!(w.entities[ia].hp < 30, "primary target hit");
         assert!(w.entities[ib].hp < 30, "chain arced to the neighbour");
+    }
+
+    #[test]
+    fn preview_affected_matches_a_real_bolt() {
+        let mut w = World::new(21);
+        let tpos = w.player().pos.step(Dir::East);
+        w.map.set(tpos, Tile::Floor);
+        let id = w.entities.len();
+        w.entities.push(dummy(id, tpos, 10));
+        let spell = compile(&[Rune::Bolt, Rune::Fire]).unwrap();
+        let (tiles, chain) = w.preview_affected(&spell, Dir::East);
+        assert!(tiles.contains(&tpos), "impact tile is in the preview");
+        assert!(chain.is_empty(), "one enemy, nothing to arc to");
+        // The preview promised a hit; the real cast must deliver it.
+        w.entities[0].mana = 50;
+        w.player_cast(&[Rune::Bolt, Rune::Fire], Dir::East).unwrap();
+        assert!(w.entities[id].hp < 10);
+    }
+
+    #[test]
+    fn preview_affected_predicts_the_lightning_arc() {
+        let mut w = World::new(22);
+        let p = w.player().pos;
+        let a = p.step(Dir::East);
+        let b = a.offset(1, 1); // within chain range of `a`
+        w.map.set(a, Tile::Floor);
+        w.map.set(b, Tile::Floor);
+        let ia = w.entities.len();
+        w.entities.push(dummy(ia, a, 30));
+        let ib = w.entities.len();
+        w.entities.push(dummy(ib, b, 30));
+        // Lightning's free arc rider: no Chain rune in the word.
+        let spell = compile(&[Rune::Bolt, Rune::Lightning]).unwrap();
+        let (tiles, chain) = w.preview_affected(&spell, Dir::East);
+        assert!(tiles.contains(&a), "primary impact previewed");
+        assert_eq!(chain, vec![b], "free arc previewed onto the neighbour");
     }
 
     #[test]

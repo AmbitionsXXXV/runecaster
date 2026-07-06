@@ -1,14 +1,14 @@
 use crate::fx::{spawn_cast_fx, spawn_fx};
 use crate::state::{
-    save_highscore, ActorId, ActorViews, AnimTarget, HighScore, MainCamera, Screen, Shake, Sim,
-    StaticTag,
+    save_highscore, ActorId, ActorViews, AnimTarget, HighScore, MainCamera, Mode, Screen, Shake,
+    Sim, StaticTag,
 };
 use crate::textures::Tiles;
 use crate::ui::{draw_title, spawn_ui};
 use crate::{BOARD_LEFT, BOARD_TOP, TILE, Z_ACTOR, Z_ITEM, Z_TILE};
 use bevy::prelude::*;
 use rand::RngExt;
-use rune_core::{EntityId, Point, RunState, Tile};
+use rune_core::{Dir, EntityId, Form, Point, RunState, Spell, Tile, World};
 use std::collections::HashSet;
 
 // ---------------------------------------------------------------------------
@@ -201,6 +201,13 @@ pub(crate) fn sync(
         }
     }
 
+    // --- aim preview: see what the loaded word hits *before* committing ---
+    if sim.mode == Mode::Aim {
+        if let Ok(spell) = w.preview(&sim.composing) {
+            draw_aim_preview(&mut commands, w, &spell, sim.aim_dir);
+        }
+    }
+
     spawn_ui(&mut commands, &sim, high.0);
 
     // --- skill effects: signature trajectories, then point bursts ---
@@ -210,6 +217,55 @@ pub(crate) fn sync(
     for ev in &fx {
         spawn_fx(&mut commands, &tiles, ev);
     }
+}
+
+/// Paint the aim-mode preview: the tiles the loaded word would strike from
+/// the player's tile along `aim` (element-colored fill), a dim flight path
+/// for stop-at-first-target bolts, and a bright pip on each enemy the
+/// chain/arc is predicted to jump to. Backed by `World::preview_affected`,
+/// which mirrors the real resolution — the highlight is a promise, not a
+/// guess. Only currently-visible tiles are painted so the preview never
+/// reveals map the player hasn't seen.
+fn draw_aim_preview(commands: &mut Commands, w: &World, spell: &Spell, aim: Dir) {
+    let (tiles, chain) = w.preview_affected(spell, aim);
+    let [r, g, b] = spell.primary_color();
+    let tint = |a: f32| Color::srgba(r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, a);
+
+    // Cosmetic flight path up to the first impact tile (Bolt only: a Beam's
+    // affected tiles already *are* the line, Touch is adjacent).
+    if spell.form == Form::Bolt {
+        let mut p = w.player().pos;
+        for _ in 0..spell.range {
+            p = p.step(aim);
+            if !w.map.in_bounds(p) || w.map.is_opaque(p) || tiles.contains(&p) {
+                break;
+            }
+            if w.is_visible(p) {
+                spawn_highlight(commands, p, tint(0.14), 1.0, Z_TILE + 0.6);
+            }
+        }
+    }
+
+    for p in &tiles {
+        if w.is_visible(*p) {
+            spawn_highlight(commands, *p, tint(0.32), 1.0, Z_TILE + 0.6);
+        }
+    }
+    // Chain victims render above the actor sprite: "it will also jump to
+    // THAT one" has to read at a glance.
+    for p in &chain {
+        if w.is_visible(*p) {
+            spawn_highlight(commands, *p, tint(0.7), 0.45, Z_ACTOR + 0.5);
+        }
+    }
+}
+
+fn spawn_highlight(commands: &mut Commands, p: Point, color: Color, scale: f32, z: f32) {
+    commands.spawn((
+        Sprite::from_color(color, Vec2::splat(TILE * scale)),
+        Transform::from_translation(tile_pos(p.x, p.y, z)),
+        StaticTag,
+    ));
 }
 
 fn actor_sprite(ent: &rune_core::Entity, tiles: &Tiles) -> Sprite {

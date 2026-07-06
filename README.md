@@ -41,12 +41,14 @@ The first build compiles all of Bevy and takes a while; later builds are fast.
 | Bind / clear a slot | `Shift`+`Q`/`E`/`R` saves the composed word to that slot (empty word clears it) |
 | Drop last rune | `Backspace` |
 | Clear the word | `Esc` |
-| Cast | `Enter` (or `C`). Bolt/Touch spells then ask you to **aim** a direction. |
+| Cast | `Enter` (or `C`). Directional spells enter **Aim mode**: the board highlights every tile the spell will hit (pre-aimed at the nearest visible enemy). The aimed direction or `Enter` fires; a different direction re-aims; `Esc` cancels. |
 | New run (after death/victory) | `Enter` or `R` |
 
 The right panel shows your known runes with their hotkeys, the word you're
-building, and a **live preview** of what it compiles to — power, mana cost, a
-backfire warning, and any grammar error.
+building, and a **live preview** of what it compiles to — power, mana cost,
+range/radius and riders (ignite, slow, arcs, lifesteal, knockback...), a
+backfire warning, and any grammar error. In Aim mode the board itself shows
+the impact tiles, the bolt's flight path, and any predicted chain-arc victims.
 
 ## The rune grammar
 
