@@ -91,6 +91,11 @@ struct BotState {
     best_dist: u32,
     turn_of_best: u64,
     committed_monster: Option<EntityId>,
+    /// A floor item the bot has spotted and is walking to. Sticky until
+    /// picked up (or gone): goal selection must not depend on *current*
+    /// visibility, or rounding a corner mid-walk would blind the bot and
+    /// flip the goal back to the stairs every other turn.
+    committed_loot: Option<Point>,
 }
 
 impl BotState {
@@ -101,6 +106,7 @@ impl BotState {
             best_dist: u32::MAX,
             turn_of_best: 0,
             committed_monster: None,
+            committed_loot: None,
         }
     }
 
@@ -124,11 +130,12 @@ impl BotState {
         }
     }
 
-    /// Forget the current goal and chase commitment (called on floor
+    /// Forget the current goal and chase/loot commitments (called on floor
     /// transitions) so the next decision starts with a fresh baseline.
     fn forget_goal(&mut self) {
         self.goal = None;
         self.committed_monster = None;
+        self.committed_loot = None;
     }
 
     /// The point the bot should currently be walking toward: whichever
@@ -162,9 +169,51 @@ impl BotState {
                 self.committed_monster = Some(id);
                 pos
             }
-            None => w.map.stairs,
+            // No live threat in range: sweep up nearby loot before heading
+            // for the stairs — learned runes are the bot's only growth, so
+            // leaving them on the floor understates how a real player's
+            // power curve rises across floors. A spotted item stays the
+            // goal until it's actually picked up.
+            None => {
+                if let Some(p) = self.committed_loot {
+                    if item_at(w, p) {
+                        return p;
+                    }
+                    self.committed_loot = None;
+                }
+                match nearest_item_within(w, from, 8) {
+                    Some(p) => {
+                        self.committed_loot = Some(p);
+                        p
+                    }
+                    None => w.map.stairs,
+                }
+            }
         }
     }
+}
+
+/// Whether a floor item (rune or relic) still lies on `p`.
+fn item_at(w: &World, p: Point) -> bool {
+    w.rune_items.iter().any(|(q, _)| *q == p) || w.relic_items.iter().any(|(q, _)| *q == p)
+}
+
+/// Nearest currently-visible floor item (rune or relic) within `max_dist`,
+/// ties broken by list order (runes before relics, then insertion order).
+fn nearest_item_within(w: &World, from: Point, max_dist: i32) -> Option<Point> {
+    let mut best: Option<(Point, i32)> = None;
+    let rune_spots = w.rune_items.iter().map(|(p, _)| *p);
+    let relic_spots = w.relic_items.iter().map(|(p, _)| *p);
+    for p in rune_spots.chain(relic_spots) {
+        if !w.is_visible(p) {
+            continue;
+        }
+        let d = from.chebyshev(p);
+        if d <= max_dist && best.is_none_or(|(_, bd)| d < bd) {
+            best = Some((p, d));
+        }
+    }
+    best.map(|(p, _)| p)
 }
 
 fn run_episode(seed: u64) -> RunRecord {
@@ -216,6 +265,35 @@ fn acted(w: &World, turn0: u64, depth0: i32) -> bool {
     w.turn != turn0 || w.depth != depth0 || w.state != RunState::Playing
 }
 
+/// Candidate attack words, strongest first, restricted to what the bot has
+/// actually learned this run. The ladder is deliberately short: an
+/// amplified fire bolt when the mana is there, a lightning bolt when its
+/// free arc has a second target worth jumping to, then the fire-bolt
+/// bread-and-butter, then the bare-element cantrip jab. Pure function of
+/// world state — no randomness — so runs stay seed-deterministic.
+fn attack_words(w: &World) -> Vec<Vec<Rune>> {
+    let knows = |r: Rune| w.known_runes.contains(&r);
+    let mut ladder: Vec<Vec<Rune>> = Vec::new();
+    if knows(Rune::Amplify) {
+        ladder.push(vec![Rune::Bolt, Rune::Fire, Rune::Amplify]);
+    }
+    if knows(Rune::Lightning) && monsters_within(w, 6) >= 2 {
+        ladder.push(vec![Rune::Bolt, Rune::Lightning]);
+    }
+    ladder.push(vec![Rune::Bolt, Rune::Fire]);
+    ladder.push(vec![Rune::Fire]);
+    ladder
+}
+
+/// Living monsters within `d` (chebyshev) of the player.
+fn monsters_within(w: &World, d: i32) -> usize {
+    let from = w.player().pos;
+    w.entities
+        .iter()
+        .filter(|e| e.alive && e.faction == Faction::Monster && from.chebyshev(e.pos) <= d)
+        .count()
+}
+
 /// Evaluate the bot's priority list once and mutate `w` accordingly. Always
 /// leaves the world having made progress: either a real game turn passed,
 /// the depth changed, or the run ended.
@@ -252,14 +330,19 @@ fn take_decision(
         }
     }
 
-    // 4. Ranged attack in the first line-of-fire direction (8-way probe).
+    // 4. Ranged attack in the first line-of-fire direction (8-way probe),
+    // casting the strongest affordable word off the learned-rune ladder.
     if !acted(w, turn0, depth0) {
         if let Some(dir) = find_castable_direction(w) {
-            if w.player().mana >= 4 {
-                let _ = w.player_cast(&[Rune::Bolt, Rune::Fire], dir);
-            }
-            if !acted(w, turn0, depth0) && w.player().mana >= 1 {
-                let _ = w.player_cast(&[Rune::Fire], dir);
+            for word in attack_words(w) {
+                let cost = match w.preview(&word) {
+                    Ok(spell) => spell.mana_cost,
+                    Err(_) => continue,
+                };
+                if w.player().mana >= cost {
+                    let _ = w.player_cast(&word, dir);
+                    break;
+                }
             }
             if !acted(w, turn0, depth0) {
                 *mana_starved += 1;
@@ -279,7 +362,8 @@ fn take_decision(
         }
     }
 
-    // 6 / 7. Chase the nearest monster within 6 tiles, else head for stairs.
+    // 6 / 7. Chase the nearest monster within 6 tiles; with no threat in
+    // range, sweep visible loot within 8; otherwise head for the stairs.
     if !acted(w, turn0, depth0) {
         let from = w.player().pos;
         let target = bot.pick_goal(w, from);
