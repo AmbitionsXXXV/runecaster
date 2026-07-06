@@ -101,7 +101,11 @@ fn determinism_full_replay_300_steps() {
             a.relic_items, b.relic_items,
             "relic_items diverged at step {step}"
         );
-        assert_eq!(a.log.len(), b.log.len(), "log length diverged at step {step}");
+        assert_eq!(
+            a.log.len(),
+            b.log.len(),
+            "log length diverged at step {step}"
+        );
 
         if a.state != RunState::Playing {
             break;
@@ -204,14 +208,16 @@ fn nova_heal_does_not_heal_enemies() {
     w.entities[0].hp = 20;
 
     // Nova + Heal costs 8 mana; the player starts with 12.
-    w.player_cast(&[Rune::Nova, Rune::Heal], Dir::North).unwrap();
+    w.player_cast(&[Rune::Nova, Rune::Heal], Dir::North)
+        .unwrap();
 
     assert_eq!(
         w.entities[dummy_id].hp, 10,
         "enemies are not healed by the player's Nova+Heal"
     );
     assert_eq!(
-        w.player().hp, 20,
+        w.player().hp,
+        20,
         "Nova excludes the caster's own tile, so the player isn't healed either"
     );
 }
@@ -268,7 +274,10 @@ fn bolt_fire_full_turn_numbers() {
     w.player_cast(&[Rune::Bolt, Rune::Fire], Dir::East).unwrap();
 
     assert_eq!(w.entities[dummy_id].hp, 14, "20 - 4 direct - 2 burn tick");
-    assert_eq!(w.entities[dummy_id].burning, 2, "3 - 1 from the same-turn tick");
+    assert_eq!(
+        w.entities[dummy_id].burning, 2,
+        "3 - 1 from the same-turn tick"
+    );
 }
 
 #[test]
@@ -292,7 +301,8 @@ fn damage_formula_regression() {
         clear_monsters(&mut w);
         let dummy_pos = w.player().pos.step(Dir::East);
         let dummy_id = add_dummy(&mut w, dummy_pos, 20, 20);
-        w.player_cast(&[Rune::Bolt, Rune::Force], Dir::East).unwrap();
+        w.player_cast(&[Rune::Bolt, Rune::Force], Dir::East)
+            .unwrap();
         assert_eq!(w.entities[dummy_id].hp, 17, "20 - 3, no status damage");
     }
 
@@ -308,7 +318,59 @@ fn damage_formula_regression() {
         w.player_cast(&[Rune::Bolt, Rune::Fire, Rune::Frost], Dir::East)
             .unwrap();
         assert_eq!(w.entities[dummy_id].hp, 2, "20 - 16 direct - 2 burn tick");
-        assert_eq!(w.entities[dummy_id].burning, 2, "3 - 1 from the same-turn tick");
-        assert_eq!(w.entities[dummy_id].slowed, 2, "an actor with no AI never spends slow");
+        assert_eq!(
+            w.entities[dummy_id].burning, 2,
+            "3 - 1 from the same-turn tick"
+        );
+        assert_eq!(
+            w.entities[dummy_id].slowed, 2,
+            "an actor with no AI never spends slow"
+        );
     }
+}
+
+/// `player_cast` tells the caller whether a spell actually happened, so the
+/// front-end can keep the composed word when nothing was cast (mana refusal)
+/// or when the action was eaten by slow.
+#[test]
+fn cast_reports_whether_a_spell_actually_happened() {
+    let mut w = World::new(4242);
+    clear_monsters(&mut w);
+
+    // A real cast reports true and spends the turn.
+    let before = w.turn;
+    assert!(matches!(
+        w.player_cast(&[Rune::Bolt, Rune::Fire], Dir::East),
+        Ok(true)
+    ));
+    assert_eq!(w.turn, before + 1);
+
+    // Mana refusal reports false, spends neither turn nor mana.
+    w.entities[0].mana = 0;
+    let before = w.turn;
+    assert!(matches!(
+        w.player_cast(&[Rune::Bolt, Rune::Fire], Dir::East),
+        Ok(false)
+    ));
+    assert_eq!(w.turn, before, "a refused cast must not spend a turn");
+    assert_eq!(w.entities[0].mana, 0, "a refused cast must not spend mana");
+
+    // A slow-eaten cast also reports false; the turn passes but no mana is
+    // paid (regen may add, never subtract — so `>=` guards the cost).
+    w.entities[0].mana = 12;
+    w.entities[0].slowed = 1;
+    let before = w.turn;
+    assert!(matches!(
+        w.player_cast(&[Rune::Bolt, Rune::Fire], Dir::East),
+        Ok(false)
+    ));
+    assert_eq!(
+        w.turn,
+        before + 1,
+        "a slow-eaten action still advances time"
+    );
+    assert!(
+        w.entities[0].mana >= 12,
+        "no mana cost is paid on a swallowed cast"
+    );
 }

@@ -23,4 +23,4 @@ pub use entity::{AiKind, Entity, EntityId, Faction};
 pub use geometry::{Dir, Point};
 pub use map::{Map, Rect, Tile};
 pub use runes::{compile, ElementKind, Form, Rune, RuneCategory, Spell, SpellError, MAX_RUNES};
-pub use world::{CastFx, Fx, FxKind, Relic, RunState, World};
+pub use world::{monster_for, CastFx, Fx, FxKind, MonsterProto, Relic, RunState, World, MONSTERS};

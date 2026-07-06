@@ -31,7 +31,10 @@ fn many_turns_stay_consistent() {
         for e in &w.entities {
             assert!(e.hp >= 0, "no negative hp");
             if e.alive {
-                assert!(w.map.is_walkable(e.pos), "living actors never stand in walls");
+                assert!(
+                    w.map.is_walkable(e.pos),
+                    "living actors never stand in walls"
+                );
             }
         }
     }

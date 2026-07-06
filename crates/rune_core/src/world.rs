@@ -50,6 +50,16 @@ impl Relic {
         Relic::Bulwark,
     ];
 
+    // Relic magnitudes. `apply_relic` and `effect_desc` both read these, so
+    // the shown text can never drift from what the relic actually does.
+    pub const VITALITY_HP: i32 = 10;
+    pub const FOCUS_MANA: i32 = 6;
+    pub const FARSIGHT_RADIUS: i32 = 2;
+    pub const EMBER_BURN: u32 = 3;
+    pub const LEECH_HEAL: i32 = 2;
+    pub const BATTERY_REGEN: i32 = 1;
+    pub const BULWARK_REGEN: i32 = 1;
+
     pub fn name(self) -> &'static str {
         match self {
             Relic::Vitality => "Heart of Vitality",
@@ -62,15 +72,15 @@ impl Relic {
         }
     }
 
-    pub fn effect_desc(self) -> &'static str {
+    pub fn effect_desc(self) -> String {
         match self {
-            Relic::Vitality => "+10 max HP",
-            Relic::Focus => "+6 max mana",
-            Relic::Farsight => "+2 sight radius",
-            Relic::Emberbrand => "melee attacks ignite",
-            Relic::Leechstone => "melee heals you",
-            Relic::Battery => "faster mana regen",
-            Relic::Bulwark => "regenerate HP each turn",
+            Relic::Vitality => format!("+{} max HP", Self::VITALITY_HP),
+            Relic::Focus => format!("+{} max mana", Self::FOCUS_MANA),
+            Relic::Farsight => format!("+{} sight radius", Self::FARSIGHT_RADIUS),
+            Relic::Emberbrand => format!("melee ignites ({} turns)", Self::EMBER_BURN),
+            Relic::Leechstone => format!("melee heals you for {}", Self::LEECH_HEAL),
+            Relic::Battery => "faster mana regen".into(),
+            Relic::Bulwark => format!("regenerate {} HP each turn", Self::BULWARK_REGEN),
         }
     }
 }
@@ -95,6 +105,9 @@ pub struct Fx {
     /// The element behind this event, when there is one, so the renderer can
     /// style the burst (fire embers vs frost shards vs …). `None` = physical.
     pub element: Option<ElementKind>,
+    /// Magnitude for damage / heal events (0 = not applicable), so the
+    /// renderer can float combat numbers without re-deriving the sim.
+    pub amount: i32,
 }
 
 impl Fx {
@@ -104,6 +117,7 @@ impl Fx {
             color,
             kind,
             element: None,
+            amount: 0,
         }
     }
 
@@ -113,7 +127,14 @@ impl Fx {
             color: element.color(),
             kind,
             element: Some(element),
+            amount: 0,
         }
+    }
+
+    /// Attach a combat magnitude (damage dealt or hit points healed).
+    fn amount(mut self, n: i32) -> Self {
+        self.amount = n;
+        self
     }
 }
 
@@ -304,15 +325,18 @@ impl World {
     }
 
     /// Compile and cast `words`, aiming `aim` (ignored by non-directional
-    /// forms). Returns the grammar error if it doesn't compile. Insufficient
-    /// mana is reported via the log and spends no turn.
-    pub fn player_cast(&mut self, words: &[Rune], aim: Dir) -> Result<(), SpellError> {
+    /// forms). Returns the grammar error if it doesn't compile. `Ok(true)`
+    /// means the spell actually resolved (turn spent); `Ok(false)` means no
+    /// spell happened — insufficient mana (logged, no turn) or the action was
+    /// swallowed by slow (turn passes) — so the caller should keep the
+    /// composed word for another attempt.
+    pub fn player_cast(&mut self, words: &[Rune], aim: Dir) -> Result<bool, SpellError> {
         if self.state != RunState::Playing {
-            return Ok(());
+            return Ok(false);
         }
         let spell = compile(words)?;
         if self.consume_player_slow() {
-            return Ok(());
+            return Ok(false);
         }
         if self.player().mana < spell.mana_cost {
             self.log.push(format!(
@@ -321,12 +345,12 @@ impl World {
                 self.player().mana,
                 spell.mana_cost
             ));
-            return Ok(());
+            return Ok(false);
         }
         self.player_mut().mana -= spell.mana_cost;
         self.resolve_spell(self.player_id, &spell, aim);
         self.end_turn();
-        Ok(())
+        Ok(true)
     }
 
     /// If the player is slowed, one stack is consumed and the attempted action
@@ -424,35 +448,22 @@ impl World {
     fn spawn_monster(&mut self, pos: Point, depth: i32) {
         let id = self.entities.len();
         let roll = self.rng.random_range(0..100);
-        // (name, glyph, hp, power, regen)
-        let (name, glyph, hp, power, regen) = if depth >= 4 && roll < 15 {
-            ("troll", 'T', 26, 6, 2) // regenerates
-        } else if depth >= 3 && roll < 35 {
-            ("ogre", 'O', 18, 6, 0)
-        } else if depth >= 2 && roll < 55 {
-            ("wraith", 'w', 12, 5, 0)
-        } else if roll < 72 {
-            ("goblin", 'g', 8, 3, 0)
-        } else if roll < 86 {
-            ("bat", 'b', 4, 2, 0)
-        } else {
-            ("rat", 'r', 5, 2, 0)
-        };
+        let proto = monster_for(depth, roll);
         self.entities.push(Entity {
             id,
-            name: name.into(),
-            glyph,
+            name: proto.name.into(),
+            glyph: proto.glyph,
             pos,
-            hp,
-            max_hp: hp,
-            power,
+            hp: proto.hp,
+            max_hp: proto.hp,
+            power: proto.power,
             mana: 0,
             max_mana: 0,
             faction: Faction::Monster,
             ai: Some(AiKind::Chaser),
             burning: 0,
             slowed: 0,
-            regen,
+            regen: proto.regen,
             alive: true,
         });
     }
@@ -503,19 +514,19 @@ impl World {
         match relic {
             Relic::Vitality => {
                 let p = self.player_mut();
-                p.max_hp += 10;
-                p.hp += 10;
+                p.max_hp += Relic::VITALITY_HP;
+                p.hp += Relic::VITALITY_HP;
             }
             Relic::Focus => {
                 let p = self.player_mut();
-                p.max_mana += 6;
-                p.mana += 6;
+                p.max_mana += Relic::FOCUS_MANA;
+                p.mana += Relic::FOCUS_MANA;
             }
-            Relic::Farsight => self.fov_radius += 2,
+            Relic::Farsight => self.fov_radius += Relic::FARSIGHT_RADIUS,
             Relic::Emberbrand => self.melee_ignite = true,
-            Relic::Leechstone => self.melee_lifesteal += 2,
-            Relic::Battery => self.mana_regen_bonus += 1,
-            Relic::Bulwark => self.player_mut().regen += 1,
+            Relic::Leechstone => self.melee_lifesteal += Relic::LEECH_HEAL,
+            Relic::Battery => self.mana_regen_bonus += Relic::BATTERY_REGEN,
+            Relic::Bulwark => self.player_mut().regen += Relic::BULWARK_REGEN,
         }
         self.log.push(format!(
             "Relic found: {} — {}.",
@@ -537,13 +548,14 @@ impl World {
         self.entities[defender].take_damage(power);
         let died = !self.entities[defender].alive;
 
-        self.fx.push(Fx::at(dpos, [235, 80, 70], FxKind::Hit));
+        self.fx
+            .push(Fx::at(dpos, [235, 80, 70], FxKind::Hit).amount(power));
 
         // Player melee relics. Lifesteal also procs on a killing blow; ignite
         // only matters on a survivor.
         if atk_is_player {
             if !died && self.melee_ignite {
-                self.entities[defender].burning += 3;
+                self.entities[defender].burning += Relic::EMBER_BURN;
             }
             if self.melee_lifesteal > 0 {
                 let steal = self.melee_lifesteal;
@@ -660,7 +672,8 @@ impl World {
             let gain = (spell.power / 2).max(1) * enemies_damaged;
             self.entities[caster_id].heal(gain);
             let cpos = self.entities[caster_id].pos;
-            self.fx.push(Fx::at(cpos, [120, 255, 150], FxKind::Heal));
+            self.fx
+                .push(Fx::at(cpos, [120, 255, 150], FxKind::Heal).amount(gain));
             if caster_is_player {
                 self.log.push(format!("You drain {} life.", gain));
             }
@@ -669,9 +682,11 @@ impl World {
         // Teleport: blink the caster.
         if spell.teleports() {
             if let Some(dest) = self.teleport_dest(origin, spell, aim) {
-                self.fx.push(Fx::at(origin, [150, 230, 255], FxKind::Teleport));
+                self.fx
+                    .push(Fx::at(origin, [150, 230, 255], FxKind::Teleport));
                 self.entities[caster_id].pos = dest;
-                self.fx.push(Fx::at(dest, [150, 230, 255], FxKind::Teleport));
+                self.fx
+                    .push(Fx::at(dest, [150, 230, 255], FxKind::Teleport));
                 if caster_is_player {
                     self.log.push("You blink through space.".into());
                 }
@@ -842,7 +857,8 @@ impl World {
         let died = !self.entities[id].alive;
 
         if healed > 0 {
-            self.fx.push(Fx::at(pos, [120, 255, 150], FxKind::Heal));
+            self.fx
+                .push(Fx::at(pos, [120, 255, 150], FxKind::Heal).amount(healed));
             if is_player {
                 self.log.push(format!("You are healed for {}.", healed));
             } else {
@@ -858,7 +874,7 @@ impl World {
         }
         if damage > 0 {
             self.fx
-                .push(Fx::styled(pos, FxKind::Hit, spell.primary_element()));
+                .push(Fx::styled(pos, FxKind::Hit, spell.primary_element()).amount(damage));
             if is_player {
                 self.log.push(format!(
                     "You take {} damage{}.",
@@ -986,8 +1002,7 @@ impl World {
                     } else {
                         for dir in move_candidates(mpos, player_pos) {
                             let dest = mpos.step(dir);
-                            if self.map.is_walkable(dest)
-                                && self.blocking_entity_at(dest).is_none()
+                            if self.map.is_walkable(dest) && self.blocking_entity_at(dest).is_none()
                             {
                                 self.entities[id].pos = dest;
                                 break;
@@ -1013,7 +1028,7 @@ impl World {
         }
         let died = !self.entities[id].alive;
         self.fx
-            .push(Fx::styled(pos, FxKind::Hit, ElementKind::Fire));
+            .push(Fx::styled(pos, FxKind::Hit, ElementKind::Fire).amount(BURN_DAMAGE));
         if is_player {
             self.log.push(format!(
                 "You burn for {}{}.",
@@ -1050,6 +1065,91 @@ impl World {
             }
         }
     }
+}
+
+/// One row of the monster balance table: spawn gate + stat block.
+#[derive(Debug, Clone, Copy)]
+pub struct MonsterProto {
+    pub name: &'static str,
+    pub glyph: char,
+    pub hp: i32,
+    pub power: i32,
+    pub regen: i32,
+    /// Minimum dungeon depth at which this monster can appear.
+    pub min_depth: i32,
+    /// Row matches while the d100 spawn roll is below this bound.
+    pub max_roll: i32,
+}
+
+/// The monster balance table. Rows are checked top to bottom: the first row
+/// whose depth gate and roll bound both match wins; the last row (`rat`,
+/// `max_roll` 100) is the guaranteed fallback. Adding a monster = adding a
+/// row here; nothing else in the spawn path needs to change.
+pub const MONSTERS: &[MonsterProto] = &[
+    MonsterProto {
+        name: "troll",
+        glyph: 'T',
+        hp: 26,
+        power: 6,
+        regen: 2,
+        min_depth: 4,
+        max_roll: 15,
+    },
+    MonsterProto {
+        name: "ogre",
+        glyph: 'O',
+        hp: 18,
+        power: 6,
+        regen: 0,
+        min_depth: 3,
+        max_roll: 35,
+    },
+    MonsterProto {
+        name: "wraith",
+        glyph: 'w',
+        hp: 12,
+        power: 5,
+        regen: 0,
+        min_depth: 2,
+        max_roll: 55,
+    },
+    MonsterProto {
+        name: "goblin",
+        glyph: 'g',
+        hp: 8,
+        power: 3,
+        regen: 0,
+        min_depth: 1,
+        max_roll: 72,
+    },
+    MonsterProto {
+        name: "bat",
+        glyph: 'b',
+        hp: 4,
+        power: 2,
+        regen: 0,
+        min_depth: 1,
+        max_roll: 86,
+    },
+    MonsterProto {
+        name: "rat",
+        glyph: 'r',
+        hp: 5,
+        power: 2,
+        regen: 0,
+        min_depth: 1,
+        max_roll: 100,
+    },
+];
+
+/// Pure spawn-table lookup: which monster a given depth and d100 roll
+/// produce. Deterministic and directly testable, unlike the RNG-driven
+/// spawn path that calls it.
+pub fn monster_for(depth: i32, roll: i32) -> &'static MonsterProto {
+    MONSTERS
+        .iter()
+        .find(|m| depth >= m.min_depth && roll < m.max_roll)
+        .unwrap_or(&MONSTERS[MONSTERS.len() - 1])
 }
 
 fn rune_drop_pool() -> Vec<Rune> {
@@ -1315,10 +1415,29 @@ mod tests {
         // silently shift every seeded run's drops. Note OnSelf never drops
         // (weight 0): it is in the starter kit, a spare would only dissolve.
         let expected = [
-            Bolt, Beam, Nova, Touch, Fire, Frost, Frost, Lightning, Lightning,
-            Heal, Force, Drain, Drain, Teleport, Barrier, Amplify, Amplify,
-            Spread, Spread, Chain, Chain,
+            Bolt, Beam, Nova, Touch, Fire, Frost, Frost, Lightning, Lightning, Heal, Force, Drain,
+            Drain, Teleport, Barrier, Amplify, Amplify, Spread, Spread, Chain, Chain,
         ];
         assert_eq!(rune_drop_pool(), expected);
+    }
+
+    #[test]
+    fn monster_table_matches_the_old_cascade() {
+        // Boundary (depth, roll) pairs, resolved exactly as the old if-else
+        // chain did — locks the data-table translation.
+        assert_eq!(monster_for(4, 14).name, "troll");
+        assert_eq!(monster_for(4, 15).name, "ogre");
+        assert_eq!(monster_for(3, 14).name, "ogre"); // troll needs depth 4
+        assert_eq!(monster_for(3, 34).name, "ogre");
+        assert_eq!(monster_for(3, 35).name, "wraith");
+        assert_eq!(monster_for(2, 54).name, "wraith");
+        assert_eq!(monster_for(2, 55).name, "goblin");
+        assert_eq!(monster_for(1, 0).name, "goblin");
+        assert_eq!(monster_for(1, 71).name, "goblin");
+        assert_eq!(monster_for(1, 72).name, "bat");
+        assert_eq!(monster_for(1, 85).name, "bat");
+        assert_eq!(monster_for(1, 86).name, "rat");
+        assert_eq!(monster_for(1, 99).name, "rat");
+        assert_eq!(monster_for(5, 0).name, "troll");
     }
 }

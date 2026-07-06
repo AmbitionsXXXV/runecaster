@@ -263,15 +263,21 @@ impl Spell {
     }
 
     pub fn drains(&self) -> bool {
-        self.elements.iter().any(|e| matches!(e, ElementKind::Drain))
+        self.elements
+            .iter()
+            .any(|e| matches!(e, ElementKind::Drain))
     }
 
     pub fn teleports(&self) -> bool {
-        self.elements.iter().any(|e| matches!(e, ElementKind::Teleport))
+        self.elements
+            .iter()
+            .any(|e| matches!(e, ElementKind::Teleport))
     }
 
     pub fn has_barrier(&self) -> bool {
-        self.elements.iter().any(|e| matches!(e, ElementKind::Barrier))
+        self.elements
+            .iter()
+            .any(|e| matches!(e, ElementKind::Barrier))
     }
 
     /// Whether the form needs the player to choose an aim direction.
@@ -427,7 +433,10 @@ mod tests {
     #[test]
     fn modifier_without_element_is_an_error() {
         assert_eq!(compile(&[Rune::Amplify]), Err(SpellError::NoElement));
-        assert_eq!(compile(&[Rune::Bolt, Rune::Chain]), Err(SpellError::NoElement));
+        assert_eq!(
+            compile(&[Rune::Bolt, Rune::Chain]),
+            Err(SpellError::NoElement)
+        );
     }
 
     #[test]
