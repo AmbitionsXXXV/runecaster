@@ -1,4 +1,4 @@
-use crate::fx::{spawn_cast_fx, spawn_fx};
+use crate::fx::{spawn_cast_fx, spawn_fx, Fading, Flash, Lunge};
 use crate::state::{
     save_highscore, ActorId, ActorViews, AnimTarget, HighScore, MainCamera, Mode, Screen, Shake,
     Sim, StaticTag,
@@ -8,7 +8,7 @@ use crate::ui::{draw_title, spawn_ui};
 use crate::{BOARD_LEFT, BOARD_TOP, TILE, Z_ACTOR, Z_ITEM, Z_TILE};
 use bevy::prelude::*;
 use rand::RngExt;
-use rune_core::{Dir, EntityId, Form, Point, RunState, Spell, Tile, World};
+use rune_core::{Dir, EntityId, Form, FxKind, Point, RunState, Spell, Tile, World};
 use std::collections::HashSet;
 
 // ---------------------------------------------------------------------------
@@ -27,6 +27,7 @@ pub(crate) fn tile_pos(tx: i32, ty: i32, z: f32) -> Vec3 {
 // Per-step rebuild + actor reconciliation + FX spawning
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn sync(
     mut commands: Commands,
     mut sim: ResMut<Sim>,
@@ -35,6 +36,7 @@ pub(crate) fn sync(
     mut shake: ResMut<Shake>,
     tiles: Res<Tiles>,
     statics: Query<Entity, With<StaticTag>>,
+    fading: Query<Entity, With<Fading>>,
 ) {
     if !sim.dirty {
         return;
@@ -74,9 +76,13 @@ pub(crate) fn sync(
     let fx = std::mem::take(&mut sim.world.fx);
     let cast = std::mem::take(&mut sim.world.cast_fx);
 
-    // Hard reset (restart / descend) → drop all actor sprites.
+    // Hard reset (restart / descend) → drop all actor sprites, including
+    // corpses still mid-fade: they belong to the level being left behind.
     if views.last_gen != sim.level_gen {
         for (_, e) in views.map.drain() {
+            commands.entity(e).despawn();
+        }
+        for e in fading.iter() {
             commands.entity(e).despawn();
         }
         views.last_gen = sim.level_gen;
@@ -197,7 +203,65 @@ pub(crate) fn sync(
         .collect();
     for id in stale {
         if let Some(e) = views.map.remove(&id) {
-            commands.entity(e).despawn();
+            // A sim entity that died this step fades out where it fell
+            // instead of vanishing on the exact frame; anything else
+            // (stale for structural reasons) still despawns instantly.
+            let died_here = w.entities.get(id).is_some_and(|ent| !ent.alive);
+            if died_here {
+                commands
+                    .entity(e)
+                    .remove::<AnimTarget>()
+                    .remove::<Flash>()
+                    .insert(Fading { age: 0.0 });
+            } else {
+                commands.entity(e).despawn();
+            }
+        }
+    }
+
+    // --- fx-driven combat juice: flash the struck, lunge the striker, and
+    // nudge the camera when a blow lands or something dies ---
+    let player_pos = w.player().pos;
+    for ev in &fx {
+        match ev.kind {
+            FxKind::Hit => {
+                if let Some(ent) = w.entities.iter().find(|e| e.alive && e.pos == ev.pos) {
+                    if let Some(&view) = views.map.get(&ent.id) {
+                        let base = actor_sprite(ent, &tiles).color;
+                        // Monsters blaze white (they're tinted, so it reads);
+                        // the player is already white, so wash red instead.
+                        let peak = if ent.is_player() {
+                            Color::srgb(1.0, 0.32, 0.28)
+                        } else {
+                            Color::WHITE
+                        };
+                        commands.entity(view).insert(Flash {
+                            age: 0.0,
+                            base,
+                            peak,
+                        });
+                    }
+                }
+                // Landing a hit on someone else nudges the camera a little
+                // (taking damage already ramps it via the HP delta above).
+                if ev.pos != player_pos {
+                    shake.trauma = (shake.trauma + 0.05).min(1.0);
+                }
+                // Melee: dart the attacker toward its victim.
+                if let Some(from) = ev.from {
+                    if let Some(att) = w.entities.iter().find(|e| e.alive && e.pos == from) {
+                        if let Some(&view) = views.map.get(&att.id) {
+                            let dir = (tile_pos(ev.pos.x, ev.pos.y, 0.0)
+                                - tile_pos(from.x, from.y, 0.0))
+                            .truncate()
+                            .normalize_or_zero();
+                            commands.entity(view).insert(Lunge { dir, age: 0.0 });
+                        }
+                    }
+                }
+            }
+            FxKind::Death => shake.trauma = (shake.trauma + 0.08).min(1.0),
+            _ => {}
         }
     }
 

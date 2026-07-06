@@ -11,7 +11,10 @@
 //! - **Actors** are *persistent* sprites tracked in [`ActorViews`]; each step
 //!   sets their [`AnimTarget`] and [`animate`] lerps them so they glide.
 //! - **Particles** spawn from the drained FX buffer and self-despawn.
-//! - **Camera shake** ramps up when the player takes damage.
+//! - **Combat juice**: struck actors flash, melee attackers lunge, dying
+//!   actors fade out; all driven by the same FX buffer.
+//! - **Camera shake** ramps when the player takes damage, and nudges a
+//!   little when the player's own blows land or something dies.
 //! - Sprite textures are generated procedurally at startup (no external
 //!   assets). To use a real tileset, load `Handle<Image>`s in `setup` instead.
 //! - **Sound** is not wired (needs audio asset files); drop `.ogg` files in
@@ -72,6 +75,11 @@ fn main() {
                 input::handle_input,
                 render::sync,
                 render::animate,
+                // Combat juice, after `animate` so lunge offsets compose on
+                // top of the position lerp instead of fighting it.
+                fx::lunges,
+                fx::flashes,
+                fx::fades,
                 fx::particles,
                 fx::projectiles,
                 fx::float_texts,

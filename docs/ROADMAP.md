@@ -67,7 +67,7 @@
 把"能玩"变"好玩摸得着"。
 
 - **2.A 工程结构（先行）**：✅ **已完成（2026-07-06，未 commit）**——main.rs 1532→85 行，拆为 `state.rs`/`textures.rs`/`input.rs`/`render.rs`/`fx.rs`/`ui.rs` 六模块（与原方案的差异：highscore 持久化并入 state.rs、sync 并入 render.rs）。归一化逐行守恒校验：除 use/模块路径/`textures::build()` 适配外零行为变更；`cargo check -p runecaster` 通过、本 crate clippy 零 warning、rune_core 42/42 不受波及。plugin 化（六个 `mod` 转 `Plugin`）留作后续可选轻量收尾。
-- **2.B 战斗手感 P0（美术）**：受击闪白（0.1s）、近战 lunge-and-return、命中敌人轻震屏、死亡淡出替代瞬消、~~结算卡半透明 scrim~~ ✅（第三轮：死亡/胜利遮罩已加暗化背板）。
+- **2.B 战斗手感 P0（美术）**：✅ **全部完成（2026-07-07）**——~~受击闪白（0.1s）~~（`Flash` 组件：怪物闪白、玩家闪红，0.11s 衰减回基色，基色由 `actor_sprite` 按 glyph 重算防漂移）、~~近战 lunge-and-return~~（core `Fx` 新增 `from: Option<Point>` 攻击者位置 + `melee()` 填充 + 测试锁定；前端 `Lunge` 半正弦 5.5px 突进回位，排在 `animate` 之后叠加不打架）、~~命中敌人轻震屏~~（命中他者 +0.05 / 击杀 +0.08 trauma，与既有受伤震屏共存）、~~死亡淡出替代瞬消~~（`Fading` 0.35s 透明+缩小后 despawn；换层/重开即时清理防残影）、~~结算卡半透明 scrim~~（第三轮已做）。四件全由既有 `Fx` 事件缓冲驱动，零 sim 行为变化；手感参数（时长/幅度）待真机试玩微调。
 - **2.C 信息呈现（策划×美术交集，两份评审同时点名）**：
   - ~~血条/法力条~~ ✅（第三轮：HP/MP 状态条，血量分段变色）；
   - ~~**Aim 模式落点/范围/Chain 目标格子高亮**（Rift Wizard 式教学核心）~~ ✅（2026-07-07）：新增只读 API `World::preview_affected`（与 `resolve_spell` 的 affected_tiles/命中顺序/弧跳种子/CHAIN_RANGE 逐条同步，2 个锁定测试保证"高亮即命中"）；render.rs 按元素色画受击区半透明填充 + Bolt 弹道暗线 + 弧跳目标亮标（仅画可见格，防漏图）。**Aim 交互升级**：进入即预瞄最近可见敌（同向再按/Enter=开火，异向=转向并移动高亮，Esc=取消）——常见射击仍是 2 键，且先见后射；

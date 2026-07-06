@@ -127,6 +127,9 @@ pub struct Fx {
     /// Magnitude for damage / heal events (0 = not applicable), so the
     /// renderer can float combat numbers without re-deriving the sim.
     pub amount: i32,
+    /// For melee hits: the attacker's tile, so the renderer can lunge the
+    /// attacking sprite toward its victim. `None` for non-melee events.
+    pub from: Option<Point>,
 }
 
 impl Fx {
@@ -137,6 +140,7 @@ impl Fx {
             kind,
             element: None,
             amount: 0,
+            from: None,
         }
     }
 
@@ -147,12 +151,19 @@ impl Fx {
             kind,
             element: Some(element),
             amount: 0,
+            from: None,
         }
     }
 
     /// Attach a combat magnitude (damage dealt or hit points healed).
     fn amount(mut self, n: i32) -> Self {
         self.amount = n;
+        self
+    }
+
+    /// Attach the attacker's tile (the renderer's melee-lunge cue).
+    fn attacker(mut self, p: Point) -> Self {
+        self.from = Some(p);
         self
     }
 }
@@ -612,13 +623,17 @@ impl World {
         let def_is_player = defender == self.player_id;
         let aname = self.entities[attacker].name.clone();
         let dname = self.entities[defender].name.clone();
+        let apos = self.entities[attacker].pos;
         let dpos = self.entities[defender].pos;
 
         self.entities[defender].take_damage(power);
         let died = !self.entities[defender].alive;
 
-        self.fx
-            .push(Fx::at(dpos, [235, 80, 70], FxKind::Hit).amount(power));
+        self.fx.push(
+            Fx::at(dpos, [235, 80, 70], FxKind::Hit)
+                .amount(power)
+                .attacker(apos),
+        );
 
         // Player melee relics. Lifesteal also procs on a killing blow; ignite
         // only matters on a survivor.
@@ -1447,6 +1462,24 @@ mod tests {
             .unwrap();
         assert!(w.entities[ia].hp < 30, "primary target hit");
         assert!(w.entities[ib].hp < 30, "chain arced to the neighbour");
+    }
+
+    #[test]
+    fn melee_hit_fx_records_the_attacker_tile() {
+        // The renderer's lunge animation keys off this: a bump-attack's Hit
+        // fx must carry the attacker's tile.
+        let mut w = World::new(23);
+        let tpos = w.player().pos.step(Dir::East);
+        w.map.set(tpos, Tile::Floor);
+        let id = w.entities.len();
+        w.entities.push(dummy(id, tpos, 10));
+        let ppos = w.player().pos;
+        w.fx.clear();
+        w.player_move(Dir::East); // bump = melee
+        assert!(w
+            .fx
+            .iter()
+            .any(|f| f.kind == FxKind::Hit && f.from == Some(ppos)));
     }
 
     #[test]

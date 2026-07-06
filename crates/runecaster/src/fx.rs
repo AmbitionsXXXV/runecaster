@@ -1,10 +1,11 @@
 use crate::render::tile_pos;
 use crate::textures::Tiles;
 use crate::{TILE, Z_FX};
+use bevy::color::Mix;
 use bevy::prelude::*;
 use rand::RngExt;
 use rune_core::{CastFx, ElementKind, Form, Fx, FxKind, Point};
-use std::f32::consts::TAU;
+use std::f32::consts::{PI, TAU};
 
 #[derive(Component)]
 pub(crate) struct Particle {
@@ -38,6 +39,96 @@ pub(crate) struct FloatText {
     pub life: f32,
     pub vel: Vec2,
     pub base: Color,
+}
+
+/// A struck actor's sprite blazes `peak` for an instant and decays back to
+/// `base` — the classic 0.1s hit flash. `base` is recomputed from the
+/// actor's glyph at insert time, so re-flashing mid-flash can't drift it.
+#[derive(Component)]
+pub(crate) struct Flash {
+    pub age: f32,
+    pub base: Color,
+    pub peak: Color,
+}
+
+const FLASH_LIFE: f32 = 0.11;
+
+/// A melee attacker's sprite darts toward its victim and settles back — a
+/// half-sine offset composed on top of the `animate` lerp.
+#[derive(Component)]
+pub(crate) struct Lunge {
+    pub dir: Vec2,
+    pub age: f32,
+}
+
+const LUNGE_LIFE: f32 = 0.16;
+const LUNGE_DIST: f32 = 5.5;
+
+/// A dying actor's sprite fades and shrinks out instead of vanishing on the
+/// exact frame the sim marks it dead.
+#[derive(Component)]
+pub(crate) struct Fading {
+    pub age: f32,
+}
+
+const FADE_LIFE: f32 = 0.35;
+
+/// Advance hit flashes: hold-and-decay from `peak` back to `base`.
+pub(crate) fn flashes(
+    time: Res<Time>,
+    mut commands: Commands,
+    mut q: Query<(Entity, &mut Flash, &mut Sprite)>,
+) {
+    let dt = time.delta_secs();
+    for (e, mut f, mut sp) in &mut q {
+        f.age += dt;
+        if f.age >= FLASH_LIFE {
+            sp.color = f.base;
+            commands.entity(e).remove::<Flash>();
+            continue;
+        }
+        let t = (f.age / FLASH_LIFE).clamp(0.0, 1.0);
+        sp.color = f.peak.mix(&f.base, t);
+    }
+}
+
+/// Advance melee lunges: a sin-arc dart toward the victim and back. Runs
+/// after `render::animate` (see the system chain), whose lerp reclaims any
+/// leftover offset, so the two compose without fighting.
+pub(crate) fn lunges(
+    time: Res<Time>,
+    mut commands: Commands,
+    mut q: Query<(Entity, &mut Lunge, &mut Transform)>,
+) {
+    let dt = time.delta_secs();
+    for (e, mut l, mut tf) in &mut q {
+        l.age += dt;
+        if l.age >= LUNGE_LIFE {
+            commands.entity(e).remove::<Lunge>();
+            continue;
+        }
+        let k = (PI * l.age / LUNGE_LIFE).sin();
+        tf.translation += (l.dir * LUNGE_DIST * k).extend(0.0);
+    }
+}
+
+/// Advance death fades: alpha out with a slight shrink, then despawn.
+pub(crate) fn fades(
+    time: Res<Time>,
+    mut commands: Commands,
+    mut q: Query<(Entity, &mut Fading, &mut Sprite, &mut Transform)>,
+) {
+    let dt = time.delta_secs();
+    for (e, mut f, mut sp, mut tf) in &mut q {
+        f.age += dt;
+        if f.age >= FADE_LIFE {
+            commands.entity(e).despawn();
+            continue;
+        }
+        let t = f.age / FADE_LIFE;
+        sp.color = sp.color.with_alpha(1.0 - t);
+        tf.scale = Vec3::splat(1.0 - 0.25 * t);
+    }
 }
 
 pub(crate) fn particles(
