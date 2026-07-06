@@ -30,6 +30,16 @@ pub(crate) struct Projectile {
     trail: [u8; 3],
 }
 
+/// A floating combat number (damage or heal) that rises and fades; spawned
+/// alongside the impact burst so hits read at a glance, not just as color.
+#[derive(Component)]
+pub(crate) struct FloatText {
+    pub age: f32,
+    pub life: f32,
+    pub vel: Vec2,
+    pub base: Color,
+}
+
 pub(crate) fn particles(
     time: Res<Time>,
     mut commands: Commands,
@@ -85,6 +95,27 @@ pub(crate) fn projectiles(
             spawn_element_burst(&mut commands, &tiles, pr.to, pr.element, 1.0);
             commands.entity(e).despawn();
         }
+    }
+}
+
+/// Advance floating combat numbers: rise, decelerate, and fade to
+/// transparent over their lifetime; despawn once they expire.
+pub(crate) fn float_texts(
+    time: Res<Time>,
+    mut commands: Commands,
+    mut q: Query<(Entity, &mut FloatText, &mut Transform, &mut TextColor)>,
+) {
+    let dt = time.delta_secs();
+    for (e, mut ft, mut tf, mut color) in &mut q {
+        ft.age += dt;
+        if ft.age >= ft.life {
+            commands.entity(e).despawn();
+            continue;
+        }
+        tf.translation += ft.vel.extend(0.0) * dt;
+        ft.vel.y *= 1.0 - dt * 0.3;
+        let t = ft.age / ft.life;
+        *color = TextColor(ft.base.with_alpha(1.0 - t));
     }
 }
 
@@ -346,6 +377,34 @@ fn death_burst(commands: &mut Commands, tiles: &Tiles, pos: Vec3, color: [u8; 3]
     }
 }
 
+/// Blend an `[u8;3]` color toward white by `t` (0..1) for a softer, more
+/// legible floating combat number than the raw impact-particle color.
+fn blend_white(c: [u8; 3], t: f32) -> Color {
+    let mix = |ch: u8| (ch as f32 / 255.0) * (1.0 - t) + t;
+    Color::srgb(mix(c[0]), mix(c[1]), mix(c[2]))
+}
+
+/// Spawn a rising, fading damage/heal number at `pos` (already at fx height).
+fn spawn_float_text(commands: &mut Commands, pos: Vec3, text: String, base: Color) {
+    let mut rng = rand::rng();
+    let jitter_x = rng.random_range(-5.0f32..5.0);
+    commands.spawn((
+        Text2d::new(text),
+        TextFont {
+            font_size: 15.0,
+            ..default()
+        },
+        TextColor(base),
+        Transform::from_translation(pos + Vec3::new(jitter_x, 6.0, 21.0)),
+        FloatText {
+            age: 0.0,
+            life: 0.8,
+            vel: Vec2::new(0.0, 26.0),
+            base,
+        },
+    ));
+}
+
 /// Point FX (impacts, heals, deaths, teleports, barriers).
 pub(crate) fn spawn_fx(commands: &mut Commands, tiles: &Tiles, ev: &Fx) {
     let pos = tile_pos(ev.pos.x, ev.pos.y, Z_FX);
@@ -358,6 +417,27 @@ pub(crate) fn spawn_fx(commands: &mut Commands, tiles: &Tiles, ev: &Fx) {
         FxKind::Death => death_burst(commands, tiles, pos, ev.color),
         FxKind::Teleport => spawn_element_burst(commands, tiles, pos, ElementKind::Teleport, 1.0),
         FxKind::Barrier => spawn_element_burst(commands, tiles, pos, ElementKind::Barrier, 1.0),
+    }
+
+    // Float a combat number over hits and heals so magnitude reads at a
+    // glance; other kinds never carry an amount (stays 0), so this is a
+    // no-op for them.
+    if ev.amount > 0 {
+        match ev.kind {
+            FxKind::Hit => spawn_float_text(
+                commands,
+                pos,
+                format!("-{}", ev.amount),
+                blend_white(ev.color, 0.35),
+            ),
+            FxKind::Heal => spawn_float_text(
+                commands,
+                pos,
+                format!("+{}", ev.amount),
+                Color::srgb(0.55, 1.0, 0.65),
+            ),
+            _ => {}
+        }
     }
 }
 

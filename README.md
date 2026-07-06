@@ -36,7 +36,7 @@ The first build compiles all of Bevy and takes a while; later builds are fast.
 | Move diagonally | `y` `u` `b` `n` (NW NE SW SE) |
 | Wait a turn | `Space` |
 | Descend stairs `>` | `Shift` + `.` while standing on the `>` |
-| Compose a spell | number keys — each appends the matching rune from the right panel |
+| Compose a spell | number keys — each appends the matching rune from the right panel (`Shift`+number reaches runes 11+) |
 | Drop last rune | `Backspace` |
 | Clear the word | `Esc` |
 | Cast | `Enter` (or `C`). Bolt/Touch spells then ask you to **aim** a direction. |
@@ -92,16 +92,21 @@ runecaster/
 │  │  ├─ entity.rs      actors
 │  │  └─ world.rs       turn engine, casting, combat, AI, levels
 │  └─ runecaster/     ← Bevy 0.18 front-end (input + rendering only)
-│     └─ main.rs
+│     ├─ main.rs        app wiring (85 lines)
+│     ├─ state.rs       resources, screens, high-score persistence
+│     ├─ textures.rs    procedural pixel-art sprites
+│     ├─ input.rs       key handling
+│     ├─ render.rs      board sync, actor animation, camera shake
+│     ├─ fx.rs          particles, projectiles, floating combat text
+│     └─ ui.rs          panels, bars, rune list, log band
 ```
 
 `rune_core` has no Bevy dependency, so the entire simulation is unit-tested and
 runs in seconds without compiling the engine:
 
 ```bash
-cargo test -p rune_core      # 20 tests: spell grammar, combat, FOV, determinism
-cargo run  -p runecaster 7   # (the binary also has a tiny ASCII level preview;
-                             #  see the bottom of main.rs history) 
+cargo test -p rune_core      # 44 tests: spell grammar, combat, FOV, determinism,
+                             # regression suite (replay, cross-depth cleanup)
 ```
 
 Because the rules are engine-agnostic, the same `rune_core` could later drive a

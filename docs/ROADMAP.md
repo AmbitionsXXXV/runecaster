@@ -25,19 +25,19 @@
 
 修确认 bug、建重构保护，全部低成本高价值。
 
-> **状态（2026-07-06）：rune_core 部分已完成（未 commit）**——B1/B2/S1/S2、掉落池派生、clippy、全部新测试已落地并经 fable 终审，`cargo test -p rune_core` 42/42 通过。剩余 0.1 与 0.7 的 main.rs/README 项（标 ⏳）需在允许编译 Bevy 的会话中做。
+> **状态（2026-07-06）：Phase 0 全部完成。**B1/B2/S1/S2、掉落池派生、热键扩展、缺蓝不清词、README 均已落地，`cargo test -p rune_core` 44/44 通过、clippy 零代码告警。逻辑修复部分已随 `7b40b08` 提交；热键/清词/README 三件与第三轮 UI 工作仍在工作区待提交。
 
 | # | 状态 | 事项 | 依据 |
 |---|---|------|------|
-| 0.1 | ⏳ | 修 **>10 符文热键不可选/错标**（main.rs:240-265, 1034）：先用 Shift+数字或 qwerty 行扩到 20 槽 | 策划 P0-3（功能性 bug，中后期锁死工具箱） |
+| 0.1 | ✅ | **>10 符文热键**：Shift+数字选 11-20 槽（input.rs `handle_normal` 与 ui.rs 面板标号 `[s1]..[s0]` 镜像同一套槽位算法），16 种符文全程可选 | 策划 P0-3（功能性 bug，中后期锁死工具箱） |
 | 0.2 | ✅ | 修 **B1**：玩家 `slowed` 真正生效——行动被吞（不扣蓝、回合推进），三入口消费（world.rs:277/299/314 + `consume_player_slow`） | 工程 B1 |
 | 0.3 | ✅ | 修 **B2**：Heal 只作用于施法者同阵营（`apply_spell_to` 增 `caster_id`，world.rs:799-819） | 工程 B2 |
 | 0.4 | ✅ | **S2** 修复：Chain 零命中不再从自身索敌（world.rs:621-648，命中后的隔墙弧跳保留=驯化）；**S1** 修复：击杀仍触发吸血（world.rs:541-552） | 工程 S1/S2、策划"驯化 Chain" |
 | 0.5 | ✅ | `rune_drop_pool` 从 `Rune::ALL` × 穷举 `drop_weight()` 派生（漏定权重=编译失败；权重逐项等价，seeded 序列零变化） | 工程 H1/H2 |
 | 0.6 | ✅ | 新增 tests/regression.rs 共 10 个：300 步全状态确定性回放、descend 跨层清理、B1×2/B2/S2/S1 边界（旧代码下会失败）、完整回合数值回归×2、掉落池逐项序列锁定 | 工程测试缺口 1/2/3/4 |
-| 0.7 | ✅/⏳ | clippy warning 已修（playthrough.rs:16）；⏳ README 测试数 20→42、法力不足施法不清词（main.rs:290,336） | 工程/策划零散项 |
+| 0.7 | ✅ | clippy warning 已修；README 更新（测试数→44、Shift 热键、六模块架构树）；**缺蓝/被减速施法不清词**——`player_cast` 改返回 `Result<bool,_>`（true=真的施放），input 层仅在 true 时清词，附回归测试 `cast_reports_whether_a_spell_actually_happened` | 工程/策划零散项 |
 
-**验收**：全部测试绿 ✅（42/42，clippy 零 warning）；B1/B2/S2 场景有测试锁定 ✅；符文 16 种全程可选 ⏳（待 0.1）。
+**验收**：全部测试绿 ✅（44/44，clippy 零代码告警）；B1/B2/S2 场景有测试锁定 ✅；符文 16 种全程可选 ✅。
 
 **fable 终审遗留的非阻断项（第二轮已基本消化）**：
 1. ✅ `Entity.ai` 死字段——已改为 `monster_turns` 真实消费 `Option<AiKind>` 并按 `AiKind::Chaser` 分发（world.rs:955-996），顺带为 Phase 3.1 新 AI 留好了 match 扩展点。
@@ -65,12 +65,13 @@
 把"能玩"变"好玩摸得着"。
 
 - **2.A 工程结构（先行）**：✅ **已完成（2026-07-06，未 commit）**——main.rs 1532→85 行，拆为 `state.rs`/`textures.rs`/`input.rs`/`render.rs`/`fx.rs`/`ui.rs` 六模块（与原方案的差异：highscore 持久化并入 state.rs、sync 并入 render.rs）。归一化逐行守恒校验：除 use/模块路径/`textures::build()` 适配外零行为变更；`cargo check -p runecaster` 通过、本 crate clippy 零 warning、rune_core 42/42 不受波及。plugin 化（六个 `mod` 转 `Plugin`）留作后续可选轻量收尾。
-- **2.B 战斗手感 P0（美术）**：受击闪白（0.1s）、近战 lunge-and-return、命中敌人轻震屏、死亡淡出替代瞬消、结算卡半透明 scrim。
+- **2.B 战斗手感 P0（美术）**：受击闪白（0.1s）、近战 lunge-and-return、命中敌人轻震屏、死亡淡出替代瞬消、~~结算卡半透明 scrim~~ ✅（第三轮：死亡/胜利遮罩已加暗化背板）。
 - **2.C 信息呈现（策划×美术交集，两份评审同时点名）**：
-  - 血条/法力条（染色矩形 sprite，替代纯文本）；
-  - **Aim 模式落点/范围/Chain 目标格子高亮**（Rift Wizard 式教学核心）；
-  - 预览补 riders（燃烧/缓速/半径/射程/吸血），修"混 Heal 词 power 虚标"；
-  - `Fx` 加 `amount` 字段 → 飘血数字。
+  - ~~血条/法力条~~ ✅（第三轮：HP/MP 状态条，血量分段变色）；
+  - **Aim 模式落点/范围/Chain 目标格子高亮**（Rift Wizard 式教学核心）——仍待做；
+  - 预览补 riders（燃烧/缓速/半径/射程/吸血），修"混 Heal 词 power 虚标"——部分改善（纯 heal 词已显示 "heal N"），riders 仍待做；
+  - ~~`Fx` 加 `amount` 字段 → 飘血数字~~ ✅（第三轮：`float_texts` 系统，命中 -N 按元素色/治疗 +N 绿色上飘）。
+  - 另第三轮已完成：UI 布局重排（TILE 18→16 与贴图 1:1、三块半透明底衬、右栏动态堆叠防重叠、8 行日志带新行高亮、RELICS 显示实际效果文本）——顺带部分解决了"像素纯洁性"决策中 tile 的非整数缩放问题。
 - **2.D 法术书/词记忆槽**：保存 2-3 个词一键施放，砍掉核心动作 80% 按键摩擦。
 - **2.E 色彩修正**：troll/goblin 拆色、元素色双源统一（runes.rs `color()` 为唯一源）、屏障独立贴图。
 - **2.F 真机截图验证**（美术遗留 4 项）：墙地对比度、非整数缩放抖动、默认字体对齐、结算卡遮挡——跑一次游戏截图定案，再决定 1.1/1.6/1.7 与像素缩放策略。
@@ -79,7 +80,7 @@
 
 ## Phase 3 — 内容与氛围（约 1-2 周）
 
-- **3.1 怪物表数据化**（if-else → `const [MonsterProto]`）→ 在新表上加**远程/施法/特殊行为怪 2-3 种 + 元素抗性/弱点**（治疗"全员近战 Chaser"的威胁单调；敌方施法复用已泛化的 `resolve_spell`）。
+- **3.1 怪物表数据化** ✅（第三轮：`MONSTERS: &[MonsterProto]` + `monster_for(depth, roll)`，14 点边界等价测试锁定，RNG 消费不变）→ 在新表上加**远程/施法/特殊行为怪 2-3 种 + 元素抗性/弱点**（治疗"全员近战 Chaser"的威胁单调；敌方施法复用已泛化的 `resolve_spell`）——仍待做。另 Relic 数值/描述双写（H4）也已在第三轮合一为共享常量 ✅。
 - **3.2 d5 独立生成表 + Boss**（多阶段考察语法掌握：召唤考 Nova/Chain、再生考 Fire、贴脸考 Teleport）。
 - **3.3 怪物剪影（混合制管线）**：静态 sprite 换 CC0 像素包（Kenney Tiny Dungeon / 0x72 Dungeon Tileset II），FX 继续程序化；与 3.1 新怪同批做。
 - **3.4 音频**：`sfxr`/`usfx` crate 运行时程序化 SFX ~14 个，挂现有 `fx`/`cast_fx` 事件；后续 ambient drone。

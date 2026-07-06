@@ -40,9 +40,13 @@ const DIGIT_KEYS: [KeyCode; 10] = [
 ];
 
 fn handle_normal(keys: &ButtonInput<KeyCode>, sim: &mut Sim) {
+    // Plain digits pick runes 1-10; Shift+digit reaches slots 11-20, so every
+    // rune stays selectable late in a run (the full pool is 16 kinds).
+    let shift = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
     for (i, key) in DIGIT_KEYS.iter().enumerate() {
         if keys.just_pressed(*key) {
-            if let Some(&rune) = sim.world.known_runes.get(i) {
+            let slot = if shift { i + 10 } else { i };
+            if let Some(&rune) = sim.world.known_runes.get(slot) {
                 if sim.composing.len() < MAX_RUNES {
                     sim.composing.push(rune);
                     sim.dirty = true;
@@ -68,8 +72,11 @@ fn handle_normal(keys: &ButtonInput<KeyCode>, sim: &mut Sim) {
                 }
                 Ok(_) => {
                     let words = sim.composing.clone();
-                    let _ = sim.world.player_cast(&words, Dir::North);
-                    sim.composing.clear();
+                    // Keep the word unless the spell actually went off, so a
+                    // mana-starved (or slow-eaten) attempt isn't retyped.
+                    if let Ok(true) = sim.world.player_cast(&words, Dir::North) {
+                        sim.composing.clear();
+                    }
                     sim.dirty = true;
                 }
                 Err(e) => {
@@ -114,8 +121,9 @@ fn handle_aim(keys: &ButtonInput<KeyCode>, sim: &mut Sim) {
     }
     if let Some(dir) = movement_dir(keys) {
         let words = sim.composing.clone();
-        let _ = sim.world.player_cast(&words, dir);
-        sim.composing.clear();
+        if let Ok(true) = sim.world.player_cast(&words, dir) {
+            sim.composing.clear();
+        }
         sim.mode = Mode::Normal;
         sim.dirty = true;
     }

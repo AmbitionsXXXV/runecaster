@@ -35,15 +35,17 @@ mod ui;
 
 use state::{load_highscore, ActorViews, HighScore, MainCamera, Shake, Sim};
 
-pub(crate) const TILE: f32 = 18.0;
+pub(crate) const TILE: f32 = 16.0;
 pub(crate) const WINDOW_W: f32 = 1280.0;
 pub(crate) const WINDOW_H: f32 = 800.0;
-pub(crate) const BOARD_LEFT: f32 = -630.0;
-pub(crate) const BOARD_TOP: f32 = 360.0;
+pub(crate) const BOARD_LEFT: f32 = -620.0;
+pub(crate) const BOARD_TOP: f32 = 352.0;
 
 pub(crate) const Z_TILE: f32 = 0.0;
 pub(crate) const Z_ITEM: f32 = 1.0;
 pub(crate) const Z_ACTOR: f32 = 5.0;
+/// Semi-transparent panel backdrops: above the map/actors, below UI text.
+pub(crate) const Z_PANEL: f32 = 8.0;
 pub(crate) const Z_UI: f32 = 10.0;
 pub(crate) const Z_FX: f32 = 20.0;
 
@@ -72,6 +74,7 @@ fn main() {
                 render::animate,
                 fx::particles,
                 fx::projectiles,
+                fx::float_texts,
                 render::camera_shake,
             )
                 .chain(),
