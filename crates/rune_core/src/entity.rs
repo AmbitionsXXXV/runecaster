@@ -34,7 +34,7 @@ pub struct Entity {
     pub ai: Option<AiKind>,
     /// Remaining turns of fire damage-over-time.
     pub burning: u32,
-    /// Remaining turns of "acts at half speed".
+    /// Remaining turns of "acts at half speed": monsters skip their action; the player's next attempted action is swallowed.
     pub slowed: u32,
     /// HP regenerated at the end of each turn (trolls; the Bulwark relic).
     pub regen: i32,

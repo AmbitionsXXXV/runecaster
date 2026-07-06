@@ -13,7 +13,7 @@ fn many_turns_stay_consistent() {
         }
         // Alternate between moving, casting, and waiting.
         match step % 6 {
-            0 | 1 | 2 => w.player_move(Dir::ALL[step % Dir::ALL.len()]),
+            0..=2 => w.player_move(Dir::ALL[step % Dir::ALL.len()]),
             3 => {
                 let _ = w.player_cast(&[Rune::Bolt, Rune::Fire], Dir::ALL[step % 8]);
             }

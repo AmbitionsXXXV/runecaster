@@ -123,6 +123,30 @@ impl Rune {
         }
     }
 
+    /// Relative weight in the floor-drop pool (0 = never drops). Exhaustive on
+    /// purpose: adding a rune without deciding its drop rate must not compile.
+    pub fn drop_weight(self) -> usize {
+        use Rune::*;
+        match self {
+            Bolt => 1,
+            Beam => 1,
+            Nova => 1,
+            OnSelf => 0, // starter kit; a spare would only dissolve to mana
+            Touch => 1,
+            Fire => 1,
+            Frost => 2,
+            Lightning => 2,
+            Heal => 1,
+            Force => 1,
+            Drain => 2,
+            Teleport => 1,
+            Barrier => 1,
+            Amplify => 2,
+            Spread => 2,
+            Chain => 2,
+        }
+    }
+
     /// RGB tint used by the renderer / UI.
     pub fn color(self) -> (u8, u8, u8) {
         use Rune::*;

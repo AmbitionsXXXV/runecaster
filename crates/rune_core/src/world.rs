@@ -274,6 +274,9 @@ impl World {
         if self.state != RunState::Playing {
             return;
         }
+        if self.consume_player_slow() {
+            return;
+        }
         let dest = self.player().pos.step(dir);
 
         if let Some(target) = self.blocking_entity_at(dest) {
@@ -293,6 +296,9 @@ impl World {
 
     pub fn player_wait(&mut self) {
         if self.state == RunState::Playing {
+            if self.consume_player_slow() {
+                return;
+            }
             self.end_turn();
         }
     }
@@ -305,6 +311,9 @@ impl World {
             return Ok(());
         }
         let spell = compile(words)?;
+        if self.consume_player_slow() {
+            return Ok(());
+        }
         if self.player().mana < spell.mana_cost {
             self.log.push(format!(
                 "Not enough mana for {} ({} / {}).",
@@ -318,6 +327,18 @@ impl World {
         self.resolve_spell(self.player_id, &spell, aim);
         self.end_turn();
         Ok(())
+    }
+
+    /// If the player is slowed, one stack is consumed and the attempted action
+    /// is lost (the world still advances a turn). Returns true if it was eaten.
+    fn consume_player_slow(&mut self) -> bool {
+        if self.entities[self.player_id].slowed == 0 {
+            return false;
+        }
+        self.entities[self.player_id].slowed -= 1;
+        self.log.push("You are slowed and lose your action!".into());
+        self.end_turn();
+        true
     }
 
     pub fn descend(&mut self) {
@@ -518,9 +539,10 @@ impl World {
 
         self.fx.push(Fx::at(dpos, [235, 80, 70], FxKind::Hit));
 
-        // Player melee relics.
-        if atk_is_player && !died {
-            if self.melee_ignite {
+        // Player melee relics. Lifesteal also procs on a killing blow; ignite
+        // only matters on a survivor.
+        if atk_is_player {
+            if !died && self.melee_ignite {
                 self.entities[defender].burning += 3;
             }
             if self.melee_lifesteal > 0 {
@@ -599,34 +621,35 @@ impl World {
             }
         }
 
-        // Chain: arc to nearby fresh enemies.
+        // Chain: arc to nearby fresh enemies. A miss (no direct hit) has
+        // nothing to arc from, so it must not seed the search from the
+        // caster's own position — no target means no chain.
         if spell.chain > 0 && spell.is_damaging() {
-            let mut from = hit
-                .last()
-                .map(|&id| self.entities[id].pos)
-                .unwrap_or(origin);
-            for _ in 0..spell.chain {
-                if let Some(next) = self.nearest_unhit_enemy(from, &hitset, CHAIN_RANGE) {
-                    hitset.insert(next);
-                    hit.push(next);
-                    let next_pos = self.entities[next].pos;
-                    self.cast_fx.push(CastFx {
-                        form: Form::Beam,
-                        element: primary,
-                        origin: from,
-                        target: next_pos,
-                        radius: 0,
-                    });
-                    from = next_pos;
-                } else {
-                    break;
+            if let Some(&last) = hit.last() {
+                let mut from = self.entities[last].pos;
+                for _ in 0..spell.chain {
+                    if let Some(next) = self.nearest_unhit_enemy(from, &hitset, CHAIN_RANGE) {
+                        hitset.insert(next);
+                        hit.push(next);
+                        let next_pos = self.entities[next].pos;
+                        self.cast_fx.push(CastFx {
+                            form: Form::Beam,
+                            element: primary,
+                            origin: from,
+                            target: next_pos,
+                            radius: 0,
+                        });
+                        from = next_pos;
+                    } else {
+                        break;
+                    }
                 }
             }
         }
 
         let mut enemies_damaged = 0;
         for id in hit {
-            let (damaged, is_enemy) = self.apply_spell_to(id, spell);
+            let (damaged, is_enemy) = self.apply_spell_to(id, spell, caster_id);
             if damaged && is_enemy {
                 enemies_damaged += 1;
             }
@@ -772,7 +795,8 @@ impl World {
     }
 
     /// Apply a spell's elements to one entity. Returns `(damaged, is_enemy)`.
-    fn apply_spell_to(&mut self, id: EntityId, spell: &Spell) -> (bool, bool) {
+    /// Healing only lands on the caster's own side (a Nova of Heal must not mend your enemies).
+    fn apply_spell_to(&mut self, id: EntityId, spell: &Spell, caster_id: EntityId) -> (bool, bool) {
         if !self.entities[id].alive {
             return (false, false);
         }
@@ -780,6 +804,7 @@ impl World {
         let is_enemy = self.entities[id].faction == Faction::Monster;
         let name = self.entities[id].name.clone();
         let pos = self.entities[id].pos;
+        let same_side = self.entities[id].faction == self.entities[caster_id].faction;
 
         let mut damage = 0;
         let mut healed = 0;
@@ -787,7 +812,11 @@ impl World {
         let mut slow = 0u32;
         for &elem in &spell.elements {
             match elem {
-                ElementKind::Heal => healed += spell.power,
+                ElementKind::Heal => {
+                    if same_side {
+                        healed += spell.power;
+                    }
+                }
                 ElementKind::Fire => {
                     damage += spell.power;
                     burn += 3;
@@ -820,6 +849,12 @@ impl World {
                 self.log
                     .push(format!("{} is healed for {}.", cap(&name), healed));
             }
+        } else if spell.heals() && !same_side && !spell.is_damaging() {
+            // A pure heal landing on a hostile target is a deliberate no-op
+            // (mending never aids the other side); say so instead of letting
+            // the cast look like a silent bug.
+            self.log
+                .push(format!("{} cannot be mended by this magic.", cap(&name)));
         }
         if damage > 0 {
             self.fx
@@ -920,14 +955,15 @@ impl World {
             if !self.entities[id].alive {
                 continue;
             }
+            // Status effects tick even on brainless actors...
             self.tick_status(id);
             if !self.entities[id].alive || !self.entities[self.player_id].alive {
                 continue;
             }
-            if self.entities[id].slowed > 0 {
-                self.entities[id].slowed -= 1;
+            // ...but only an actor with an AI takes an action at all.
+            let Some(ai) = self.entities[id].ai else {
                 continue;
-            }
+            };
 
             let mpos = self.entities[id].pos;
             let dist = mpos.chebyshev(player_pos);
@@ -936,14 +972,27 @@ impl World {
                 continue; // dormant until it can see you (or you get close)
             }
 
-            if dist == 1 {
-                self.melee(id, self.player_id);
-            } else {
-                for dir in move_candidates(mpos, player_pos) {
-                    let dest = mpos.step(dir);
-                    if self.map.is_walkable(dest) && self.blocking_entity_at(dest).is_none() {
-                        self.entities[id].pos = dest;
-                        break;
+            // Slow is only spent in place of an action it would otherwise
+            // take; dormant monsters keep their stacks until they wake.
+            if self.entities[id].slowed > 0 {
+                self.entities[id].slowed -= 1;
+                continue;
+            }
+
+            match ai {
+                AiKind::Chaser => {
+                    if dist == 1 {
+                        self.melee(id, self.player_id);
+                    } else {
+                        for dir in move_candidates(mpos, player_pos) {
+                            let dest = mpos.step(dir);
+                            if self.map.is_walkable(dest)
+                                && self.blocking_entity_at(dest).is_none()
+                            {
+                                self.entities[id].pos = dest;
+                                break;
+                            }
+                        }
                     }
                 }
             }
@@ -1004,30 +1053,12 @@ impl World {
 }
 
 fn rune_drop_pool() -> Vec<Rune> {
-    // Elements and modifiers appear more often than extra forms.
-    vec![
-        Rune::Bolt,
-        Rune::Beam,
-        Rune::Nova,
-        Rune::Touch,
-        Rune::Fire,
-        Rune::Frost,
-        Rune::Frost,
-        Rune::Lightning,
-        Rune::Lightning,
-        Rune::Heal,
-        Rune::Force,
-        Rune::Drain,
-        Rune::Drain,
-        Rune::Teleport,
-        Rune::Barrier,
-        Rune::Amplify,
-        Rune::Amplify,
-        Rune::Spread,
-        Rune::Spread,
-        Rune::Chain,
-        Rune::Chain,
-    ]
+    // Derived from `Rune::ALL` + per-rune weights so a newly added rune can
+    // never silently miss the pool (see `Rune::drop_weight`).
+    Rune::ALL
+        .iter()
+        .flat_map(|&r| std::iter::repeat_n(r, r.drop_weight()))
+        .collect()
 }
 
 fn move_candidates(from: Point, to: Point) -> Vec<Dir> {
@@ -1274,5 +1305,20 @@ mod tests {
         w.player_cast(&[Rune::Nova, Rune::Lightning], Dir::North)
             .unwrap();
         assert_eq!(w.turn, before);
+    }
+
+    #[test]
+    fn drop_pool_is_derived_and_unchanged() {
+        use Rune::*;
+        // Locked item-by-item on purpose: the pool's order feeds seeded RNG
+        // indexing, so reordering `Rune::ALL` or changing any weight would
+        // silently shift every seeded run's drops. Note OnSelf never drops
+        // (weight 0): it is in the starter kit, a spare would only dissolve.
+        let expected = [
+            Bolt, Beam, Nova, Touch, Fire, Frost, Frost, Lightning, Lightning,
+            Heal, Force, Drain, Drain, Teleport, Barrier, Amplify, Amplify,
+            Spread, Spread, Chain, Chain,
+        ];
+        assert_eq!(rune_drop_pool(), expected);
     }
 }

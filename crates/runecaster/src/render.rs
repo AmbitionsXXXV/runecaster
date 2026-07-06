@@ -1,0 +1,265 @@
+use crate::fx::{spawn_cast_fx, spawn_fx};
+use crate::state::{
+    save_highscore, ActorId, ActorViews, AnimTarget, HighScore, MainCamera, Screen, Shake, Sim,
+    StaticTag,
+};
+use crate::textures::Tiles;
+use crate::ui::{draw_title, spawn_ui};
+use crate::{BOARD_LEFT, BOARD_TOP, TILE, Z_ACTOR, Z_ITEM, Z_TILE};
+use bevy::prelude::*;
+use rand::RngExt;
+use rune_core::{EntityId, Point, RunState, Tile};
+use std::collections::HashSet;
+
+// ---------------------------------------------------------------------------
+// Coordinate mapping
+// ---------------------------------------------------------------------------
+
+pub(crate) fn tile_pos(tx: i32, ty: i32, z: f32) -> Vec3 {
+    Vec3::new(
+        BOARD_LEFT + tx as f32 * TILE + TILE / 2.0,
+        BOARD_TOP - ty as f32 * TILE - TILE / 2.0,
+        z,
+    )
+}
+
+// ---------------------------------------------------------------------------
+// Per-step rebuild + actor reconciliation + FX spawning
+// ---------------------------------------------------------------------------
+
+pub(crate) fn sync(
+    mut commands: Commands,
+    mut sim: ResMut<Sim>,
+    mut views: ResMut<ActorViews>,
+    mut high: ResMut<HighScore>,
+    mut shake: ResMut<Shake>,
+    tiles: Res<Tiles>,
+    statics: Query<Entity, With<StaticTag>>,
+) {
+    if !sim.dirty {
+        return;
+    }
+    sim.dirty = false;
+
+    for e in statics.iter() {
+        commands.entity(e).despawn();
+    }
+
+    if sim.screen == Screen::Title {
+        for (_, e) in views.map.drain() {
+            commands.entity(e).despawn();
+        }
+        draw_title(&mut commands, high.0);
+        return;
+    }
+
+    // Damage-driven shake + one-shot score recording (mutate sim before the
+    // shared borrow below).
+    let hp_now = sim.world.player().hp;
+    let hp_lost = sim.last_hp - hp_now;
+    sim.last_hp = hp_now;
+    if hp_lost > 0 {
+        shake.trauma = (shake.trauma + hp_lost as f32 / 12.0).min(1.0);
+    }
+    if sim.world.state != RunState::Playing && !sim.recorded {
+        sim.recorded = true;
+        let s = sim.world.score();
+        if s > high.0 {
+            high.0 = s;
+            save_highscore(s);
+        }
+    }
+
+    // Drain visual events (mutates the world).
+    let fx = std::mem::take(&mut sim.world.fx);
+    let cast = std::mem::take(&mut sim.world.cast_fx);
+
+    // Hard reset (restart / descend) → drop all actor sprites.
+    if views.last_gen != sim.level_gen {
+        for (_, e) in views.map.drain() {
+            commands.entity(e).despawn();
+        }
+        views.last_gen = sim.level_gen;
+    }
+
+    let w = &sim.world;
+
+    // --- tiles ---
+    for ty in 0..w.map.height {
+        for tx in 0..w.map.width {
+            let p = Point::new(tx, ty);
+            if !w.is_explored(p) {
+                continue;
+            }
+            let image = match w.map.tile(p) {
+                Tile::Wall => {
+                    if w.is_temp_wall(p) {
+                        tiles.stairs.clone() // distinct look handled by tint below
+                    } else {
+                        tiles.wall.clone()
+                    }
+                }
+                Tile::Floor => tiles.floor.clone(),
+                Tile::StairsDown => tiles.stairs.clone(),
+            };
+            let visible = w.is_visible(p);
+            let tint = if w.is_temp_wall(p) {
+                if visible {
+                    Color::srgb(0.45, 0.6, 0.95)
+                } else {
+                    Color::srgb(0.2, 0.27, 0.42)
+                }
+            } else if visible {
+                Color::WHITE
+            } else {
+                Color::srgb(0.42, 0.42, 0.52)
+            };
+            commands.spawn((
+                Sprite {
+                    image,
+                    color: tint,
+                    custom_size: Some(Vec2::splat(TILE)),
+                    ..default()
+                },
+                Transform::from_translation(tile_pos(tx, ty, Z_TILE)),
+                StaticTag,
+            ));
+        }
+    }
+
+    // --- floor runes ---
+    for (p, rune) in &w.rune_items {
+        if !w.is_visible(*p) {
+            continue;
+        }
+        let (cr, cg, cb) = rune.color();
+        commands.spawn((
+            Sprite {
+                image: tiles.gem.clone(),
+                color: Color::srgb_u8(cr, cg, cb),
+                custom_size: Some(Vec2::splat(TILE * 0.72)),
+                ..default()
+            },
+            Transform::from_translation(tile_pos(p.x, p.y, Z_ITEM)),
+            StaticTag,
+        ));
+    }
+
+    // --- floor relics ---
+    for (p, _relic) in &w.relic_items {
+        if !w.is_visible(*p) {
+            continue;
+        }
+        commands.spawn((
+            Sprite {
+                image: tiles.relic.clone(),
+                custom_size: Some(Vec2::splat(TILE * 0.92)),
+                ..default()
+            },
+            Transform::from_translation(tile_pos(p.x, p.y, Z_ITEM)),
+            StaticTag,
+        ));
+    }
+
+    // --- reconcile actor sprites (persistent + animated) ---
+    let mut seen: HashSet<EntityId> = HashSet::new();
+    for ent in &w.entities {
+        if !ent.alive {
+            continue;
+        }
+        seen.insert(ent.id);
+        let target = tile_pos(ent.pos.x, ent.pos.y, Z_ACTOR);
+        let vis = if w.is_visible(ent.pos) {
+            Visibility::Visible
+        } else {
+            Visibility::Hidden
+        };
+        if let Some(&e) = views.map.get(&ent.id) {
+            commands.entity(e).insert((AnimTarget(target), vis));
+        } else {
+            let e = commands
+                .spawn((
+                    actor_sprite(ent, &tiles),
+                    Transform::from_translation(target),
+                    AnimTarget(target),
+                    ActorId(ent.id),
+                    vis,
+                ))
+                .id();
+            views.map.insert(ent.id, e);
+        }
+    }
+    let stale: Vec<EntityId> = views
+        .map
+        .keys()
+        .copied()
+        .filter(|id| !seen.contains(id))
+        .collect();
+    for id in stale {
+        if let Some(e) = views.map.remove(&id) {
+            commands.entity(e).despawn();
+        }
+    }
+
+    spawn_ui(&mut commands, &sim, high.0);
+
+    // --- skill effects: signature trajectories, then point bursts ---
+    for cf in &cast {
+        spawn_cast_fx(&mut commands, &tiles, cf);
+    }
+    for ev in &fx {
+        spawn_fx(&mut commands, &tiles, ev);
+    }
+}
+
+fn actor_sprite(ent: &rune_core::Entity, tiles: &Tiles) -> Sprite {
+    if ent.is_player() {
+        return Sprite {
+            image: tiles.player.clone(),
+            custom_size: Some(Vec2::splat(TILE * 0.98)),
+            ..default()
+        };
+    }
+    let (tint, scale) = match ent.glyph {
+        'T' => (Color::srgb(0.45, 0.72, 0.42), 1.35), // troll
+        'O' => (Color::srgb(0.95, 0.42, 0.36), 1.30), // ogre
+        'w' => (Color::srgb(0.76, 0.83, 0.98), 1.00), // wraith
+        'g' => (Color::srgb(0.52, 0.85, 0.42), 0.98), // goblin
+        'b' => (Color::srgb(0.64, 0.5, 0.74), 0.72),  // bat
+        _ => (Color::srgb(0.74, 0.58, 0.45), 0.78),   // rat / other
+    };
+    Sprite {
+        image: tiles.creature.clone(),
+        color: tint,
+        custom_size: Some(Vec2::splat(TILE * scale)),
+        ..default()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Per-frame animation, particles, shake
+// ---------------------------------------------------------------------------
+
+pub(crate) fn animate(time: Res<Time>, mut q: Query<(&mut Transform, &AnimTarget)>) {
+    let t = (time.delta_secs() * 16.0).min(1.0);
+    for (mut tf, target) in &mut q {
+        tf.translation = tf.translation.lerp(target.0, t);
+    }
+}
+
+pub(crate) fn camera_shake(
+    time: Res<Time>,
+    mut shake: ResMut<Shake>,
+    mut q: Query<&mut Transform, With<MainCamera>>,
+) {
+    shake.trauma = (shake.trauma - time.delta_secs() * 1.8).max(0.0);
+    let amount = shake.trauma * shake.trauma;
+    let mut rng = rand::rng();
+    let max = 14.0;
+    let ox = rng.random_range(-1.0f32..1.0) * amount * max;
+    let oy = rng.random_range(-1.0f32..1.0) * amount * max;
+    if let Ok(mut tf) = q.single_mut() {
+        tf.translation.x = ox;
+        tf.translation.y = oy;
+    }
+}
